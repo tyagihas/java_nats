@@ -1,24 +1,19 @@
 package nats.examples;
 
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.nio.ByteBuffer;
-import java.nio.channels.SocketChannel;
-import java.nio.charset.Charset;
 import java.util.Properties;
-
-import nats.Client;
+import nats.Session;
 
 public class Pub {
 
 	public static void main(String[] args) throws Exception {
-		
-		Client client = Client.connect(new Properties());
-		client.start();
+		Session session = Session.connect(new Properties());
+		session.start();
 
-		System.out.println("Publishing...");
-		client.publish("hello", "test", null, null);
+		System.out.println("Publishing...");		
+		session.publish("hello", "world", null, null);
+		session.flush();
 		
-		Thread.sleep(Long.MAX_VALUE);
+		session.stop();
+		System.exit(0);
 	}
 }
