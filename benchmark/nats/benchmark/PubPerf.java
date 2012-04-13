@@ -16,7 +16,7 @@ public class PubPerf {
 		System.out.println("Performing Publish performance test");
 		final long start = System.nanoTime();
 		for(int i = 1; i <= loop; i++) {
-			session.publish("hello", "a", null, null);
+			session.publish("hello", Integer.toString(i), null, null);
 			if (i % hash == 0)
 				System.out.print("+");
 		}

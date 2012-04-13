@@ -8,10 +8,11 @@ import java.nio.channels.spi.SelectorProvider;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 
 public class Session {
 	
-	public static final String version = "0.2";
+	public static final String version = "0.2.1";
     public static final int DEFAULT_PORT = 4222;
     public static final String DEFAULT_PRE = "nats://localhost:";
     public static final String DEFAULT_URI = DEFAULT_PRE + Integer.toString(DEFAULT_PORT);
@@ -26,7 +27,7 @@ public class Session {
     public static final int DEFAULT_RECONNECT_TIME_WAIT = 2*1000;
     public static final int DEFAULT_MAX_RECONNECT_ATTEMPTS = 10;
 
-    public static final int MAX_BUFFER_SIZE = 327680;
+    public static final int MAX_BUFFER_SIZE = 32768;
     
     // Protocol
     public static final String CONTROL_LINE = "/^(.*)\r\n/";
@@ -59,45 +60,41 @@ public class Session {
 
     public static final int FLUSH_THRESHOLD = 65536;
     
-    
-    private static Selector selector;
-    private static Session.SelectorThread selectorThread;
-    private static int numConns;
+    private static int numSessions;
     private static volatile int ssid;
-
+    private Selector selector;
+    private Session.SelectorThread selectorThread;
+    
     private Properties opts;
     private SocketChannel channel;
     private ByteBuffer receiveBuffer;
     private ByteBuffer sendBuffer;
     private int status;
-    private ConcurrentLinkedQueue<byte[]> pendings;
+    private byte[] pendings;
+    private int pend_idx;
     private ConcurrentHashMap<Integer, Subscription> subs;    
-    private ConcurrentLinkedQueue<EventHandler> pongs;
+    private LinkedList<EventHandler> pongs;
     private Timer timer;
     
     private int msgs_sent;
     private int bytes_sent;
         
     static {
-    	try {
-    		ssid = 1;
-    		numConns = 0;
-    		selector = SelectorProvider.provider().openSelector();
-    		selectorThread = new SelectorThread();
-    	} 
-    	catch (IOException e) {
-    		e.printStackTrace();
-    	}
+   		ssid = 1;
+   		numSessions = 0;
     }
     
     private Session(Properties popts) throws IOException, InterruptedException {
+		selector = SelectorProvider.provider().openSelector();
+		selectorThread = new SelectorThread();
     	receiveBuffer = ByteBuffer.allocateDirect(MAX_BUFFER_SIZE);
     	sendBuffer = ByteBuffer.allocateDirect(MAX_BUFFER_SIZE);
     	status = AWAITING_CONTROL;
     	msgs_sent = bytes_sent = 0;
     	subs = new ConcurrentHashMap<Integer, Subscription>();
-    	pendings = new ConcurrentLinkedQueue<byte[]>();
-    	pongs = new ConcurrentLinkedQueue<EventHandler>();
+    	pendings = new byte[MAX_BUFFER_SIZE];
+    	pend_idx = 0;
+    	pongs = new LinkedList<EventHandler>();
     	
     	opts = popts;
     	String[] uri = ((String)opts.get("uri")).split(":");
@@ -152,28 +149,26 @@ public class Session {
     }
 
     public void start() throws IOException, InterruptedException {
-    	if (!selectorThread.isAlive()) {
-    		selectorThread.start();
-    		while(!selectorThread.ready())
-    			Thread.sleep(50);
-    	}
+   		selectorThread.start();
+   		while(!selectorThread.ready())
+   			Thread.sleep(50);
+   		
     	this.sendCommand("CONNECT {\"verbose\":" + ((Boolean)opts.get("verbose")).toString() + ",\"pedantic\":" + ((Boolean)opts.get("pedantic")).toString() + "}" + CR_LF);
-    	sendPing();
-    	numConns++;
+    	numSessions++;
     }
     
     public void stop() throws IOException {
     	channel.close();
-    	numConns--;
-    	if (numConns == 0) {
+    	numSessions--;
+    	if (numSessions == 0)
     		selector.close();
-    		try {
-    			selectorThread.join();
-    		}
-    		catch(InterruptedException ie) {
-    			ie.printStackTrace();
-    		}
-    	}
+    	try {
+    		selectorThread.running = false;
+			selectorThread.join();
+		}
+		catch(InterruptedException ie) {
+			ie.printStackTrace();
+		}
     }
     
     public boolean isConnected() {
@@ -187,7 +182,6 @@ public class Session {
     		bytes_sent += msg.length();
     	}
     	sendCommand("PUB " + subject + " " + ((opt_reply == null) ? "" : opt_reply) + " " + Integer.toString(msg.length()) + CR_LF + msg + CR_LF);
-    	sendPing();
     }
     
     public Integer subscribe(String subject, EventHandler handler) throws IOException {
@@ -251,9 +245,24 @@ public class Session {
     }
     
     private void sendCommand(String cmd) throws IOException {
-   		pendings.add(cmd.getBytes());
-   		if (pendings.size() == 1) 
+   		int length = cmd.length();
+   		
+   		if ((channel.keyFor(selector).interestOps() & SelectionKey.OP_WRITE) == 0)
         	channel.register(selector, SelectionKey.OP_READ | SelectionKey.OP_WRITE, this);
+
+    	if (pend_idx >= MAX_BUFFER_SIZE - length - 6)
+   			flush();
+
+    	append(cmd, length);
+    }
+    
+    private void append(String str, int length) {
+   		synchronized(pendings) { 
+    		System.arraycopy(str.getBytes(), 0, pendings, pend_idx, length);
+    		pendings[pend_idx + length] = '\0';
+    		pend_idx += length;
+   			pendings.notify();
+    	}    	    	
     }
     
     private void sendPing() throws IOException {
@@ -263,13 +272,17 @@ public class Session {
     private void sendPing(EventHandler handler) throws IOException {
     	if (handler == null)
     		handler = emptyHandler;
-    	pongs.add(handler);
-    	sendCommand(PING_REQUEST);
+    	
+    	synchronized(pongs) {
+    		pongs.add(handler);
+    		pongs.notify();
+    	}
+    	append(PING_REQUEST, 6);
     }
     
     private int write(byte[] b) throws IOException {
     	sendBuffer.clear();
-		sendBuffer.put(b);
+		sendBuffer.put(b, 0, pend_idx);
 		sendBuffer.flip();
     	
     	return channel.write(sendBuffer);
@@ -286,7 +299,7 @@ public class Session {
    			handler.caller.join();
     	}
     	catch(Exception e) {
-    		System.out.println("Pending messages are flushed.");
+    		// System.out.println("Pending messages are flushed.");
     	}
     }
     
@@ -300,7 +313,7 @@ public class Session {
     	public Thread caller;
     	public void execute(Object o) {}
     }
-    
+
     private EventHandler emptyHandler = new EventHandler() {};
     
     public class Subscription {
@@ -315,7 +328,7 @@ public class Session {
     	}
     }
     
-    private static class SelectorThread extends Thread {
+    private class SelectorThread extends Thread {
 		private volatile boolean running = false;
 		
 		public boolean ready() {
@@ -324,29 +337,28 @@ public class Session {
 		
 		public void run() {
 			running = true;
-			while(true) {
+			while(running) {
 				try {
-					int readyChannels = selector.select();
+					int readyChannels = selector.select(5);
 					if(readyChannels == 0) continue;
 					Set<SelectionKey> keys = selector.selectedKeys();
 					
 					for(Iterator<SelectionKey> iter = keys.iterator(); iter.hasNext();) {
 						SelectionKey key = iter.next();
-						SocketChannel ch = (SocketChannel)key.channel();
 						Session session = (Session)key.attachment();
 						if (key.isWritable()) {
-				    		while ((session.pendings.size() > 0) && (session.write(session.pendings.peek()) > 0))
-				    			session.pendings.poll();			// write succeeded and removed from pending list
-				    		
-				    		if (session.pendings.size() == 0)		// change back to listening mode
+							if (session.pend_idx > 0) {
+								synchronized(session.pendings) {
+									session.pend_idx -= session.write(session.pendings);
+									session.pendings.notify();
+								}
+							} 
+							// change back to listening mode														
+							if (session.pend_idx == 0) 
 								key.interestOps(SelectionKey.OP_READ);
 						}
-						if (key.isReadable())
-							processMessage(ch, session);
-						if (key.isConnectable()) {
-							System.out.println("finishconnect");
-							ch.finishConnect();
-						}
+						else if (key.isReadable())
+							session.processMessage();
 						iter.remove();
 					}
 				}
@@ -364,71 +376,72 @@ public class Session {
 				}	
 			}
 			System.out.println("SelectorThread exiting");
-			
 		}    	
     }
     
-    private static void processMessage(SocketChannel ch, Session session) throws IOException {
-    	if (ch.read(session.receiveBuffer) > 0) {
-    		session.receiveBuffer.flip();
-    		String[] msgs = read(session.receiveBuffer).split(CR_LF);
-    		String[] params = null;
+	private String[] params = null;
+    private void processMessage() throws IOException {
+    	if (channel.read(receiveBuffer) > 0) {
+    		receiveBuffer.flip();
+    		String[] msgs = read(receiveBuffer).split(CR_LF);
     		String op = null;
     		boolean fragmented = false;
     		
     		for(int i = 0; i < msgs.length; i++) {
     			op = msgs[i];
-    			switch(session.status) {
+    			switch(status) {
     			case AWAITING_CONTROL :
-    				if ((op.length() >= 3) && (op.substring(0,3).equals("MSG"))) {
+        			if ((op.length() > 1) && (op.charAt(0) == '\n')) 
+        				op = op.substring(1, op.length()); // eliminating LF at front
+        			if ((op.length() >= 3) && (op.substring(0,3).equals("MSG"))) {
     					params = op.split(SPC);
-        				session.status = AWAITING_MSG_PAYLOAD;
+    					if (params.length >= 4)
+    						status = AWAITING_MSG_PAYLOAD;
+    					else 
+    						fragmented = true;
     				}
-        			else if (op.equals("PONG")) {
-        				EventHandler handler = session.pongs.poll();
-       					handler.execute(null);
-       					if (handler.caller != null)
-       						handler.caller.interrupt();
-        			}
-        			else if (op.equals("PING"))
-        				session.sendCommand(PONG_RESPONSE);
-        			else if ((op.equals("-ERR")) || (op.equals("+OK")) || (op.equals(""))) {
-        				// do nothing for now
-        			}
-        			else if ((op.length() >= 4) && (op.substring(0,4).equals("INFO"))) {
-        				// do nothing for now
-        			}
-       				else {
-       					System.out.println("Unknown op : " + op + "@");
-       					fragmented = true;
-       				}
-       				break;
+    				else if (op.equals("PONG")) {
+    					EventHandler handler = null;
+    					synchronized(pongs) {
+    						handler = pongs.poll();
+    					}
+    					handler.execute(null);
+    					if (handler.caller != null)
+    						handler.caller.interrupt();
+    				}
+    				else if (op.equals("PING"))	sendCommand(PONG_RESPONSE);
+    				else if ((op.equals("-ERR")) || (op.equals("+OK")) || (op.equals(""))) {/* do nothing for now */}
+    				else if ((op.length() >= 4) && (op.substring(0,4).equals("INFO"))) {/* do nothing for now */}
+    				else fragmented = true; /* Unknown operation, possibly fragmented */
+    				break;
     			case AWAITING_MSG_PAYLOAD :
     				Integer sid = Integer.valueOf(params[2]);
-    				int length = Integer.parseInt(params[3]);
-    				Subscription sub = (Subscription)session.subs.get(sid); 
-    				sub.handler.execute(msgs[i]);
-    				sub.received++;
-    				session.status = AWAITING_CONTROL;
+    				int length = Integer.parseInt(params[3].trim());
+    				Subscription sub = (Subscription)subs.get(sid);
+    				if (length > op.length())
+    					fragmented = true;
+    				else {
+    					sub.handler.execute(op);
+    					sub.received++;
+    					status = AWAITING_CONTROL;
+    				}
     				break;
     			}
+    			receiveBuffer.clear();
+    			// The command is not fully read yet. Push back to the buffer.
+    			if (fragmented) {
+   					receiveBuffer.put(op.getBytes());
+    				fragmented = false;
+    			}
     		}
-			session.receiveBuffer.clear();
-			if (fragmented) {
-				// push back to the buffer
-				session.receiveBuffer.put(op.getBytes());
-				fragmented = false;
-			}
     	}    	
     }
 
-    private static byte[] buf = new byte[MAX_BUFFER_SIZE];
-    private static String read(ByteBuffer buffer) {
+    private byte[] buf = new byte[MAX_BUFFER_SIZE];
+    private String read(ByteBuffer buffer) {
     	String param = null;
-
     	buffer.get(buf, buffer.position(), buffer.limit()-buffer.position());
    		param = new String(buf, 0, buffer.position());
-    	
    		return param;
     }
 
