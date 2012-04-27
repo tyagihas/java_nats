@@ -22,10 +22,11 @@ public class PubSubPerf {
 			int received = 0;
 			public void execute(Object o) {
 				received++;
+				
 				if (received == loop) {
 					double elapsed = System.nanoTime() - start;
 					System.out.println();
-					System.out.println("elapsed : " + Double.toString(elapsed / 1000000000) + " seconds");
+					System.out.println("\nelapsed : " + Double.toString(elapsed / 1000000000) + " seconds");
 					System.out.println("msg/sec : " + Double.toString(loop / (elapsed / 1000000000)));						
 
 					System.out.println("Exiting...");
@@ -39,6 +40,7 @@ public class PubSubPerf {
 				for(int i = 1; i <= loop; i++) {
 					try {
 						session2.publish("test", "a", null, null);
+						// session2.publish("test", "aaaabbbbccccdddd", null, null);
 						if (i % hash == 0)
 							System.out.print("+");
 					}

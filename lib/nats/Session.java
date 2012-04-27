@@ -6,13 +6,12 @@ import java.nio.ByteBuffer;
 import java.nio.channels.*;
 import java.nio.channels.spi.SelectorProvider;
 import java.util.*;
+import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
 
 public class Session {
 	
-	public static final String version = "0.2.1";
+	public static final String version = "0.2.2";
     public static final int DEFAULT_PORT = 4222;
     public static final String DEFAULT_PRE = "nats://localhost:";
     public static final String DEFAULT_URI = DEFAULT_PRE + Integer.toString(DEFAULT_PORT);
@@ -58,14 +57,13 @@ public class Session {
     public static final String Q_SUB = "/^([^\\.\\*>\\s]+|>$|\\*)(\\.([^\\.\\*>\\s]+|>$|\\*))*$/";
     public static final String Q_SUB_NO_WC = "/^([^\\.\\*>\\s]+)(\\.([^\\.\\*>\\s]+))*$/";
 
-    public static final int FLUSH_THRESHOLD = 65536;
-    
     private static int numSessions;
     private static volatile int ssid;
     private Selector selector;
     private Session.SelectorThread selectorThread;
     
     private Properties opts;
+    private InetSocketAddress addr;
     private SocketChannel channel;
     private ByteBuffer receiveBuffer;
     private ByteBuffer sendBuffer;
@@ -98,14 +96,25 @@ public class Session {
     	
     	opts = popts;
     	String[] uri = ((String)opts.get("uri")).split(":");
-    	int port = Integer.parseInt(uri[2]);
-    	
-    	channel = SocketChannel.open();
-    	channel.connect(new InetSocketAddress(uri[1].substring(2, uri[1].length()), port));
-    	channel.configureBlocking(false);
-    	channel.register(selector, SelectionKey.OP_CONNECT | SelectionKey.OP_READ, this);    	
+    	addr = new InetSocketAddress(uri[1].substring(2, uri[1].length()), Integer.parseInt(uri[2]));
+    	connect();
 
-    	timer = new Timer("NATS_Timer");
+    	timer = new Timer("NATS_Timer-" + numSessions);
+    }
+    
+    private boolean connect() throws IOException {
+    	try {
+    		channel = SocketChannel.open();
+    		channel.connect(addr);
+    		channel.configureBlocking(false);
+    		channel.register(selector, SelectionKey.OP_READ | SelectionKey.OP_WRITE, this);
+    	}
+    	catch(IOException ie) {
+    		ie.printStackTrace();
+    		return false;
+    	}
+    	
+    	return true;
     }
     
     private String hexRand(int limit, Random rand) {
@@ -144,15 +153,11 @@ public class Session {
     	if (System.getenv("NATS_MAX_RECONNECT_TIME_WAIT") != null) popts.put("max_reconnect_time_wait", Integer.parseInt(System.getenv("NATS_MAX_RECONNECT_TIME_WAIT")));
 
     	Session session = new Session(popts);
-
     	return session;
     }
 
     public void start() throws IOException, InterruptedException {
-   		selectorThread.start();
-   		while(!selectorThread.ready())
-   			Thread.sleep(50);
-   		
+    	selectorThread.start();
     	this.sendCommand("CONNECT {\"verbose\":" + ((Boolean)opts.get("verbose")).toString() + ",\"pedantic\":" + ((Boolean)opts.get("pedantic")).toString() + "}" + CR_LF);
     	numSessions++;
     }
@@ -160,10 +165,11 @@ public class Session {
     public void stop() throws IOException {
     	channel.close();
     	numSessions--;
-    	if (numSessions == 0)
-    		selector.close();
+    	if (numSessions == 0) selector.close();
     	try {
-    		selectorThread.running = false;
+    		synchronized(selectorThread) {
+    			selectorThread.running = false;
+    		}
 			selectorThread.join();
 		}
 		catch(InterruptedException ie) {
@@ -190,21 +196,34 @@ public class Session {
     
     public Integer subscribe(String subject, Properties popts, EventHandler handler) throws IOException {
     	Integer sid = ssid++;
-    	subs.put(sid, new Subscription(subject, handler));
+    	Subscription sub = new Subscription(subject, handler);
     	
-    	String queue = " ";
-    	Integer max = null;
     	if (popts != null) {
-    		queue = (popts.getProperty("queue") == null ? " " : (String)popts.getProperty("queue"));
-        	max = (Integer)popts.get("max");
+    		sub.queue = (popts.getProperty("queue") == null ? " " : (String)popts.getProperty("queue"));
+        	sub.max = ((Integer)popts.get("max")).intValue();
     	}
-    	sendCommand("SUB " + subject + " " + queue + sid.toString() + CR_LF);
     	
-    	if (max != null) this.unsubscribe(sid, max.intValue());
+    	subs.put(sid, sub);
+    	sendSubscription(subject, sid, sub);
     	
     	return sid;
     }
     
+    private void sendSubscription(String subject, Integer sid, Subscription sub) throws IOException {
+    	sendCommand("SUB " + subject + " " + sub.queue + sid.toString() + CR_LF);
+    	
+    	if (sub.max != -1) this.unsubscribe(sid, sub.max);
+    }
+    
+    private void sendSubscirptions() throws IOException {
+    	Entry<Integer, Subscription> entry = null;
+    	
+    	for(Iterator<Entry<Integer, Session.Subscription>> iter = subs.entrySet().iterator(); iter.hasNext();) {
+    		entry = iter.next();
+    		sendSubscription(entry.getValue().subject, entry.getKey(), entry.getValue());
+    	}
+    }
+
     public void unsubscribe(Integer sid) throws IOException {
     	this.unsubscribe(sid, 0);
     }
@@ -247,21 +266,19 @@ public class Session {
     private void sendCommand(String cmd) throws IOException {
    		int length = cmd.length();
    		
-   		if ((channel.keyFor(selector).interestOps() & SelectionKey.OP_WRITE) == 0)
-        	channel.register(selector, SelectionKey.OP_READ | SelectionKey.OP_WRITE, this);
-
-    	if (pend_idx >= MAX_BUFFER_SIZE - length - 6)
-   			flush();
-
+    	if (pend_idx >= MAX_BUFFER_SIZE - length - 6) // "6" is buffer for PING
+			flush();
+			
     	append(cmd, length);
     }
     
-    private void append(String str, int length) {
+    private void append(String str, int length) throws ClosedChannelException {
    		synchronized(pendings) { 
+   	   		if ((channel.keyFor(selector).interestOps() & SelectionKey.OP_WRITE) == 0)
+   	        	channel.register(selector, SelectionKey.OP_READ | SelectionKey.OP_WRITE, this);
+
     		System.arraycopy(str.getBytes(), 0, pendings, pend_idx, length);
-    		pendings[pend_idx + length] = '\0';
     		pend_idx += length;
-   			pendings.notify();
     	}    	    	
     }
     
@@ -270,12 +287,10 @@ public class Session {
     }
     
     private void sendPing(EventHandler handler) throws IOException {
-    	if (handler == null)
-    		handler = emptyHandler;
+    	if (handler == null) handler = emptyHandler;
     	
     	synchronized(pongs) {
     		pongs.add(handler);
-    		pongs.notify();
     	}
     	append(PING_REQUEST, 6);
     }
@@ -288,21 +303,26 @@ public class Session {
     	return channel.write(sendBuffer);
     }
     
-    public void flush() {
+    public void flush() throws IOException {
     	flush(emptyHandler);
     }
 
-    public void flush(EventHandler handler) {
-    	try {
-    		handler.caller = Thread.currentThread();
-    		sendPing(handler);
-   			handler.caller.join();
-    	}
-    	catch(Exception e) {
-    		// System.out.println("Pending messages are flushed.");
-    	}
+    public void flush(EventHandler handler) throws IOException {
+   		handler.caller = Thread.currentThread();
+   		sendPing(handler);
+		try {
+			handler.caller.join();
+		} catch (InterruptedException e) {
+			// e.printStackTrace();
+		}
     }
     
+    public void reconnect() throws IOException {
+    	channel.close();
+    	connect();
+    	sendSubscirptions();
+    }
+        
     public String inspect() {
     	return "<nats java " + version + ">";
     }
@@ -319,6 +339,8 @@ public class Session {
     public class Subscription {
     	public String subject = null;
     	public EventHandler handler = null;
+    	public String queue = "";
+    	public int max = -1;
     	public int received = 0;
     	public TimerTask task = null;
     	
@@ -329,7 +351,7 @@ public class Session {
     }
     
     private class SelectorThread extends Thread {
-		private volatile boolean running = false;
+		private boolean running = false;
 		
 		public boolean ready() {
 			return running;
@@ -339,66 +361,63 @@ public class Session {
 			running = true;
 			while(running) {
 				try {
-					int readyChannels = selector.select(5);
+					int readyChannels = selector.select(1);
 					if(readyChannels == 0) continue;
 					Set<SelectionKey> keys = selector.selectedKeys();
 					
 					for(Iterator<SelectionKey> iter = keys.iterator(); iter.hasNext();) {
 						SelectionKey key = iter.next();
 						Session session = (Session)key.attachment();
+						
 						if (key.isWritable()) {
 							if (session.pend_idx > 0) {
 								synchronized(session.pendings) {
 									session.pend_idx -= session.write(session.pendings);
-									session.pendings.notify();
+									// change back to listening only mode														
+									if (session.pend_idx == 0) key.interestOps(SelectionKey.OP_READ);
 								}
-							} 
-							// change back to listening mode														
-							if (session.pend_idx == 0) 
-								key.interestOps(SelectionKey.OP_READ);
+							}
 						}
-						else if (key.isReadable())
-							session.processMessage();
+						else if (key.isReadable()) session.processMessage();
 						iter.remove();
 					}
 				}
-				catch(CancelledKeyException cke) {
-					cke.printStackTrace();
-					continue;
-				}
-				catch(ClosedSelectorException cse) {
-					cse.printStackTrace();
-					break;
-				}
 				catch(Exception e) {
-					e.printStackTrace();
 					break;
 				}	
 			}
-			System.out.println("SelectorThread exiting");
 		}    	
     }
     
 	private String[] params = null;
+	private String prev = null;
     private void processMessage() throws IOException {
     	if (channel.read(receiveBuffer) > 0) {
     		receiveBuffer.flip();
-    		String[] msgs = read(receiveBuffer).split(CR_LF);
+    		String[] msgs = read(receiveBuffer).split("\n");
     		String op = null;
-    		boolean fragmented = false;
+    		    		
+    		// Merging fragments
+    		if (prev != null) {
+    			msgs[0] = prev + msgs[0];
+    			prev = null;
+    		}
     		
     		for(int i = 0; i < msgs.length; i++) {
     			op = msgs[i];
+				if (op.length() == 0) continue;
+				if (op.charAt(op.length()-1) != '\r') {
+					prev = op;
+					break;
+				}
+				else op = op.substring(0, op.length()-1);
+				
     			switch(status) {
-    			case AWAITING_CONTROL :
-        			if ((op.length() > 1) && (op.charAt(0) == '\n')) 
-        				op = op.substring(1, op.length()); // eliminating LF at front
+    			case AWAITING_CONTROL :       				
         			if ((op.length() >= 3) && (op.substring(0,3).equals("MSG"))) {
     					params = op.split(SPC);
-    					if (params.length >= 4)
-    						status = AWAITING_MSG_PAYLOAD;
-    					else 
-    						fragmented = true;
+    					status = AWAITING_MSG_PAYLOAD;
+    					break;
     				}
     				else if (op.equals("PONG")) {
     					EventHandler handler = null;
@@ -410,39 +429,30 @@ public class Session {
     						handler.caller.interrupt();
     				}
     				else if (op.equals("PING"))	sendCommand(PONG_RESPONSE);
-    				else if ((op.equals("-ERR")) || (op.equals("+OK")) || (op.equals(""))) {/* do nothing for now */}
+    				else if (op.equals("-ERR")) { reconnect(); }
+    				else if (op.equals("+OK")) {/* do nothing for now */}
     				else if ((op.length() >= 4) && (op.substring(0,4).equals("INFO"))) {/* do nothing for now */}
-    				else fragmented = true; /* Unknown operation, possibly fragmented */
     				break;
     			case AWAITING_MSG_PAYLOAD :
+    				// Extracting MSG parameters
     				Integer sid = Integer.valueOf(params[2]);
     				int length = Integer.parseInt(params[3].trim());
     				Subscription sub = (Subscription)subs.get(sid);
-    				if (length > op.length())
-    					fragmented = true;
-    				else {
-    					sub.handler.execute(op);
-    					sub.received++;
-    					status = AWAITING_CONTROL;
-    				}
+   					sub.handler.execute(op);
+   					sub.received++;
+   					status = AWAITING_CONTROL;
     				break;
-    			}
-    			receiveBuffer.clear();
-    			// The command is not fully read yet. Push back to the buffer.
-    			if (fragmented) {
-   					receiveBuffer.put(op.getBytes());
-    				fragmented = false;
-    			}
+    			}    			    			
     		}
-    	}    	
+			receiveBuffer.clear();
+    	}
     }
 
     private byte[] buf = new byte[MAX_BUFFER_SIZE];
     private String read(ByteBuffer buffer) {
     	String param = null;
-    	buffer.get(buf, buffer.position(), buffer.limit()-buffer.position());
-   		param = new String(buf, 0, buffer.position());
+    	buffer.get(buf, 0, buffer.limit());
+   		param = new String(buf, 0, buffer.limit());
    		return param;
     }
-
 }

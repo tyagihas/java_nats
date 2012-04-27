@@ -16,7 +16,8 @@ public class PubPerf {
 		System.out.println("Performing Publish performance test");
 		final long start = System.nanoTime();
 		for(int i = 1; i <= loop; i++) {
-			session.publish("hello", Integer.toString(i), null, null);
+			// session.publish("hello", "aaaabbbbccccdddd", null, null);
+			session.publish("hello", "a", null, null);
 			if (i % hash == 0)
 				System.out.print("+");
 		}
@@ -25,8 +26,7 @@ public class PubPerf {
 		session.flush(session.new EventHandler() {
 			public void execute(Object o) {
 				double elapsed = System.nanoTime() - start;
-				System.out.println();
-				System.out.println("elapsed : " + Double.toString(elapsed / 1000000000) + " seconds");
+				System.out.println("\nelapsed : " + Double.toString(elapsed / 1000000000) + " seconds");
 				System.out.println("msg/sec : " + Double.toString(loop / (elapsed / 1000000000)));	
 			}
 		});
