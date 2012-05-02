@@ -10,7 +10,7 @@ public class Pub {
 		session.start();
 
 		System.out.println("Publishing...");		
-		session.publish("hello", "world", null, null);
+		session.publish("hello", "world");
 		session.flush();
 		
 		session.stop();

@@ -11,7 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class Session {
 	
-	public static final String version = "0.2.2";
+	public static final String version = "0.2.3";
     public static final int DEFAULT_PORT = 4222;
     public static final String DEFAULT_PRE = "nats://localhost:";
     public static final String DEFAULT_URI = DEFAULT_PRE + Integer.toString(DEFAULT_PORT);
@@ -51,6 +51,7 @@ public class Session {
 
     // Responses
     public static final String PING_REQUEST = "PING" + CR_LF;
+    public static final int PING_REQUEST_LEN = PING_REQUEST.length();
     public static final String PONG_RESPONSE = "PONG" + CR_LF;
 
     // Pedantic Mode support
@@ -181,7 +182,11 @@ public class Session {
     	return channel.isConnected();
     }
     
-    public void publish(String subject, String msg, String opt_reply, EventHandler handler) throws IOException {
+    public void publish(String subject, String msg) throws IOException {
+    	publish(subject, null, msg, null);
+    }
+
+    public void publish(String subject, String opt_reply, String msg, EventHandler handler) throws IOException {
     	if (subject == null) return;
     	if (msg != null) {
     		msgs_sent++;
@@ -266,7 +271,7 @@ public class Session {
     private void sendCommand(String cmd) throws IOException {
    		int length = cmd.length();
    		
-    	if (pend_idx >= MAX_BUFFER_SIZE - length - 6) // "6" is buffer for PING
+    	if (pend_idx >= MAX_BUFFER_SIZE - length - PING_REQUEST_LEN) // "PING_REQUEST_LEN" is buffer for PING
 			flush();
 			
     	append(cmd, length);
@@ -292,7 +297,7 @@ public class Session {
     	synchronized(pongs) {
     		pongs.add(handler);
     	}
-    	append(PING_REQUEST, 6);
+    	append(PING_REQUEST, PING_REQUEST_LEN);
     }
     
     private int write(byte[] b) throws IOException {
@@ -301,6 +306,20 @@ public class Session {
 		sendBuffer.flip();
     	
     	return channel.write(sendBuffer);
+    }
+    
+    public Integer request(String subject, EventHandler handler) throws IOException {
+    	return request(subject, "", null, handler);
+    }
+
+    public Integer request(String subject, String data, Properties popts, EventHandler handler) throws IOException {
+    	if (subject == null) return null;
+    	
+    	String inbox = createInbox();
+    	Integer sub = subscribe(inbox, popts, handler);
+    	publish(subject, inbox, data, null);
+    	
+    	return sub;
     }
     
     public void flush() throws IOException {
@@ -317,21 +336,25 @@ public class Session {
 		}
     }
     
+    public String inspect() {
+    	return "<nats java " + version + ">";
+    }
+    
     public void reconnect() throws IOException {
     	channel.close();
     	connect();
     	sendSubscirptions();
     }
         
-    public String inspect() {
-    	return "<nats java " + version + ">";
-    }
     
-    
-    // Event processing and main loop
+    // Event processing and message loop
     public abstract class EventHandler {
     	public Thread caller;
     	public void execute(Object o) {}
+    }
+
+    public class RequestEventHandler extends EventHandler {
+    	public void execute(String request, String replyTo) {}
     }
 
     private EventHandler emptyHandler = new EventHandler() {};
@@ -383,14 +406,15 @@ public class Session {
 					}
 				}
 				catch(Exception e) {
+					// e.printStackTrace();
 					break;
 				}	
 			}
 		}    	
     }
     
-	private String[] params = null;
 	private String prev = null;
+	private String[] params = null;
     private void processMessage() throws IOException {
     	if (channel.read(receiveBuffer) > 0) {
     		receiveBuffer.flip();
@@ -436,9 +460,16 @@ public class Session {
     			case AWAITING_MSG_PAYLOAD :
     				// Extracting MSG parameters
     				Integer sid = Integer.valueOf(params[2]);
-    				int length = Integer.parseInt(params[3].trim());
     				Subscription sub = (Subscription)subs.get(sid);
-   					sub.handler.execute(op);
+    				int length = -1;
+    				if (params.length == 4) {
+    					length = Integer.parseInt(params[3].trim());
+       					sub.handler.execute(op);
+    				}
+    				else {
+    					length = Integer.parseInt(params[4].trim());
+    					((RequestEventHandler)sub.handler).execute(op, params[3]);
+    				}
    					sub.received++;
    					status = AWAITING_CONTROL;
     				break;

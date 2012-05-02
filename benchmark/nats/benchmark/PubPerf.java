@@ -16,12 +16,11 @@ public class PubPerf {
 		System.out.println("Performing Publish performance test");
 		final long start = System.nanoTime();
 		for(int i = 1; i <= loop; i++) {
-			// session.publish("hello", "aaaabbbbccccdddd", null, null);
-			session.publish("hello", "a", null, null);
+			// session.publish("hello", "aaaabbbbccccdddd");
+			session.publish("hello", "a");
 			if (i % hash == 0)
 				System.out.print("+");
 		}
-		System.out.println("");
 		
 		session.flush(session.new EventHandler() {
 			public void execute(Object o) {

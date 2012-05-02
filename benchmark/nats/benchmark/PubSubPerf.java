@@ -39,8 +39,8 @@ public class PubSubPerf {
 			public void execute(Object o) {
 				for(int i = 1; i <= loop; i++) {
 					try {
-						session2.publish("test", "a", null, null);
-						// session2.publish("test", "aaaabbbbccccdddd", null, null);
+						session2.publish("test", "a");
+						// session2.publish("test", "aaaabbbbccccdddd");
 						if (i % hash == 0)
 							System.out.print("+");
 					}
