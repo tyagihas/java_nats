@@ -8,7 +8,7 @@ public class PubSubPerf {
 
 	public static void main(String[] args) throws Exception {
 		final int loop = 100000;
-		final int hash = 5000;
+		final int hash = 2500;
 		
 		final Session session1 = Session.connect(new Properties());
 		session1.start();
