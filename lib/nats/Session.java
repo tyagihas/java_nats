@@ -21,7 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public final class Session {
 
-	public static final String version = "0.2.4";
+	public static final String version = "0.2.5";
 	
 	public static final int DEFAULT_PORT = 4222;
 	public static final String DEFAULT_URI = "nats://localhost:" + Integer.toString(DEFAULT_PORT);
@@ -53,10 +53,16 @@ public final class Session {
 	public static final String SPC = " ";
 
 	// Protocol
-	public static final String PUB = "PUB";
-	public static final String SUB = "SUB";
-	public static final String UNSUB = "UNSUB";
-	public static final String CONNECT = "CONNECT";
+	public static final byte[] PUB = "PUB".getBytes();
+	public static final byte[] SUB = "SUB".getBytes();
+	public static final byte[] UNSUB = "UNSUB".getBytes();
+	public static final byte[] CONNECT = "CONNECT".getBytes();
+	public static final byte[] MSG = "MSG".getBytes();
+	public static final byte[] PONG = "PONG".getBytes();
+	public static final byte[] PING = "PING".getBytes();
+	public static final byte[] INFO = "INFO".getBytes();
+	public static final byte[] ERR = "-ERR".getBytes();
+	public static final byte[] OK = "+OK".getBytes();
 
 	// Responses
 	public static final byte[] PING_REQUEST = ("PING" + CR_LF).getBytes();
@@ -213,7 +219,6 @@ public final class Session {
 		publish(subject, null, msg, null);
 	}
 
-	byte[] cmd = new byte[MAX_BUFFER_SIZE];
 	/**
 	 * Publish a message to the given subject, with optional reply and event handler.
 	 * @param subject
@@ -222,11 +227,11 @@ public final class Session {
 	 * @param handler event handler is invoked when publish has been processed by the server.
 	 * @throws IOException
 	 */
+	byte[] cmd = new byte[MAX_BUFFER_SIZE];
 	public void publish(String subject, String opt_reply, String msg, EventHandler handler) throws IOException {
 		if (subject == null) return;
 
-		int offset = 0;
-		offset = bytesCopy(cmd, offset, "PUB ");
+		int offset = bytesCopy(cmd, 0, "PUB ");
 		offset = bytesCopy(cmd, offset, subject);
 		cmd[offset++] = 0x20; // SPC
 		if (opt_reply != null)  {
@@ -247,9 +252,7 @@ public final class Session {
 			bytes_sent += msg.length();
 		}
 		
-		if (handler != null) {
-			sendPing(handler);
-		}
+		if (handler != null) sendPing(handler);
 	}
 
 	private int bytesCopy(byte[] b, int start, String data) {
@@ -350,23 +353,16 @@ public final class Session {
 	}
     
 	private void sendCommand(byte[] data, int length) throws IOException {
-		// set configurable retry counter and interval
 		for(;;) { 
 			try {
 				synchronized(sendBuffer) {
 					sendBuffer.put(data, 0, length);
-					if (sKey.interestOps() == 1)
-						channel.register(selector, 0x5); // read & write mode
+					if (sKey.interestOps() == 1) channel.register(selector, 0x5); // read & write mode
 				}
 				break;
 			}
-			catch(BufferOverflowException bof) {
- 			}
+			catch(BufferOverflowException bof) {}
 		}
-	}
-    
-	private void sendPing() throws IOException {
-		sendPing(emptyHandler);
 	}
     
 	private void sendPing(EventHandler handler) throws IOException {
@@ -437,10 +433,10 @@ public final class Session {
 	}
     
 	private void reconnect() throws IOException {
-		int max_reconnects_attempt = ((Integer)opts.get("max_reconnects_attempt")).intValue();
+		int max_reconnect_attempts = ((Integer)opts.get("max_reconnect_attempts")).intValue();
 		int reconnect_time_wait = ((Integer)opts.get("reconnect_time_wait")).intValue();
 		
-		for(int i = 0; i < max_reconnects_attempt; i++) {
+		for(int i = 0; i < max_reconnect_attempts; i++) {
 			channel.close();
 			connect();
 			if (isConnected()) {
@@ -518,7 +514,7 @@ public final class Session {
 	 * Internal data structure to hold subscription meta data
 	 * @author Teppei Yagihashi
 	 */
-	public class Subscription {
+	private class Subscription {
 		public String subject = null;
 		public EventHandler handler = null;
 		public String queue = "";
@@ -536,16 +532,30 @@ public final class Session {
 	 * Main thread for processing incoming and outgoing messages through NIO channel
 	 */
 	private final class SelectorThread extends Thread {
-    	
+		private byte[] buf = new byte[MAX_BUFFER_SIZE];
+		private int pos;
+		private int payload_length;
+		private Subscription sub;
+
+		public SelectorThread() {
+			for(int l = 0; l < MAX_BUFFER_SIZE; l++)
+				buf[l] = '\0';		
+			pos = 0;
+			payload_length = -1;
+		}
+		
 		public void run() {
-			int readyChannels = 0;
 			try {
 				for(;;) {
-					readyChannels = selector.select(1);
+					selector.select(1);
 					if (sKey.isWritable()) {
 						synchronized(sendBuffer) {							
 							sendBuffer.flip();
-							while (sendBuffer.position() < sendBuffer.limit()) channel.write(sendBuffer);
+							for(;;) {
+								if (sendBuffer.position() < sendBuffer.limit())	
+									channel.write(sendBuffer);
+								else break;
+							}
 							sendBuffer.clear();
 							sKey.interestOps(0x1); // read only mode
 						}
@@ -554,85 +564,93 @@ public final class Session {
 				}
 			}
 			catch(Exception e) {
+				e.printStackTrace();
+				System.exit(1);
 			}	
 		}    	
-	}
-    
-	/**
-	 * Parse and process various incoming messages
-	 */
-	private String prev = null;
-	private String[] params = null;
-	private void processMessage() throws IOException {
-		if (channel.read(receiveBuffer) > 0) {
-			receiveBuffer.flip();
-			String[] msgs = read(receiveBuffer).split("\n");
-			String op = null;
-    		    		
-			// Merging fragments
-			if (prev != null) {
-				msgs[0] = prev + msgs[0];
-				prev = null;
-			}
-    		
-			for(int i = 0; i < msgs.length; i++) {
-				op = msgs[i];
-				if (op.length() == 0) continue;
-				if (op.charAt(op.length()-1) != '\r') {
-					prev = op;
-					break;
-				}
-				else op = op.substring(0, op.length()-1);
-				
-				switch(status) {
-				case AWAITING_CONTROL :       				
-					if ((op.length() >= 3) && (op.substring(0,3).equals("MSG"))) {
-						params = op.split(SPC);
-						status = AWAITING_MSG_PAYLOAD;
+		
+		/**
+		 * Parse and process various incoming messages
+		 */
+		private void processMessage() throws IOException {
+			if (channel.read(receiveBuffer) > 0) {
+				int diff = 0;
+				receiveBuffer.flip();
+				for(;;) {
+					if (receiveBuffer.position() >= receiveBuffer.limit())
 						break;
-					}
-					else if (op.equals("PONG")) {
-						EventHandler handler;
-						synchronized(pongs) {
-							handler = pongs.poll();
+					switch(status) {
+					case AWAITING_CONTROL :
+						if ((pos = readNextOp(receiveBuffer)) == 0) {
+							if (comp(buf, MSG, 3)) {
+								status = AWAITING_MSG_PAYLOAD;
+								parseMsg();
+								if (receiveBuffer.limit() < (payload_length + receiveBuffer.position() + 2)) {
+								    diff = receiveBuffer.limit() - receiveBuffer.position();
+								    // Don't clear() yet and keep it in buffer
+									receiveBuffer.compact();
+									receiveBuffer.position(diff);
+									return;									
+								}
+								break;
+							}
+							else if (comp(buf, PONG, 4)) {
+								EventHandler handler;
+								synchronized(pongs) {
+									handler = pongs.poll();
+								}
+								handler.execute(null);
+								if (handler.caller != null)
+									handler.caller.interrupt();
+							}
+							else if (comp(buf, PING, 4)) sendCommand(PONG_RESPONSE, PONG_RESPONSE_LEN);
+							else if (comp(buf, ERR, 4)) reconnect();
+							else if (comp(buf, OK, 3)) {/* do nothing for now */}
+							else if (comp(buf, INFO, 4)) {/* do nothing for now */}
 						}
-						handler.execute(null);
-						if (handler.caller != null)
-							handler.caller.interrupt();
+						break;
+					case AWAITING_MSG_PAYLOAD :
+						receiveBuffer.get(buf, 0, payload_length + 2);
+						sub.handler.execute(new String(buf, 0, payload_length));
+						pos = 0;
+						sub.received++;
+						status = AWAITING_CONTROL;					
 						break;
 					}
-					else if (op.equals("PING"))	sendCommand(PONG_RESPONSE, PONG_RESPONSE_LEN);
-					else if (op.equals("-ERR")) { reconnect(); }
-					else if (op.equals("+OK")) {/* do nothing for now */}
-					else if ((op.length() >= 4) && (op.substring(0,4).equals("INFO"))) {/* do nothing for now */}
-					break;
-					case AWAITING_MSG_PAYLOAD :
-					// Extracting MSG parameters
-					Integer sid = Integer.valueOf(params[2]);
-					Subscription sub = (Subscription)subs.get(sid);
-					int length = -1;
-					if (params.length == 4) {
-						length = Integer.parseInt(params[3].trim());
-						sub.handler.execute(op);
-					}
-					else {
-						length = Integer.parseInt(params[4].trim());
-						((RequestEventHandler)sub.handler).execute(op, params[3]);
-					}
-					sub.received++;
-					status = AWAITING_CONTROL;
-					break;
-				}    			    			
+				}
+				receiveBuffer.clear();
 			}
-			receiveBuffer.clear();
 		}
-	}
+		
+		private int readNextOp(ByteBuffer buffer) {
+			int i = pos, limit = buffer.limit();
+			
+			for(; buffer.position() < limit; i++) {
+				buf[i] = buffer.get();
+				if ((i > 0) && (buf[i] == '\n') && (buf[i-1] == '\r')) 
+					return 0;
+			}
+			return i;
+		}
+		
+		private boolean comp(byte[] src, byte[] dest, int length) {
+			for(int i = 0; i < length; i++)
+				if (src[i] != dest[i])
+					return false;
+			return true;
+		}
 
-	private byte[] buf = new byte[MAX_BUFFER_SIZE];
-	private String read(ByteBuffer buffer) {
-		String param = null;
-		buffer.get(buf, 0, buffer.limit());
-		param = new String(buf, 0, buffer.limit());
-		return param;
-	}
+		// Extracting MSG parameters
+		private void parseMsg() {
+			int index = 0, rid = 0, start = 0;
+			for( ; buf[index++] != 0xd; ) {
+				if (buf[index] == 0x20) {
+					if (rid++ == 2)
+						sub = (Subscription)subs.get(Integer.valueOf(new String(buf,start,index-start)));						
+					start = ++index;
+				}
+			}			
+			payload_length = Integer.parseInt(new String(buf,start,--index-start));
+		}		
+	}    
 }

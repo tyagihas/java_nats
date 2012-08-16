@@ -7,22 +7,25 @@ import nats.Session.EventHandler;
 public class PubSubPerf {
 
 	public static void main(String[] args) throws Exception {
-		final int loop = 100000;
+		final int loop = (args.length == 0 || args[0] == null) ? 100000 : Integer.parseInt(args[0]);
+		int size = (args.length == 0 || args[1] == null) ? 1 : Integer.parseInt(args[1]);
 		final int hash = 2500;
-		
+		StringBuffer buf = new StringBuffer();
+		for(int l = 0; l < size; l++) buf.append("a");
+		final String val = buf.toString();
+
 		final Session session1 = Session.connect(new Properties());
 		session1.start();
 		final Session session2 = Session.connect(new Properties());
 		session2.start();
 
 		System.out.println("Performing Publish/Subscribe performance test");
-		
 		final long start = System.nanoTime();
 		session1.subscribe("test", session1.new EventHandler() {
 			int received = 0;
 			public void execute(Object o) {
 				received++;
-				
+				// System.out.println("Execute : " + (String)o);
 				if (received == loop) {
 					double elapsed = System.nanoTime() - start;
 					System.out.println();
@@ -39,8 +42,8 @@ public class PubSubPerf {
 			public void execute(Object o) {
 				for(int i = 1; i <= loop; i++) {
 					try {
-						session2.publish("test", "a");
-						// session2.publish("test", "aaaabbbbccccdddd");
+						session2.publish("test", val);
+						// session2.publish("test", "aaaa\r\nbbbb\r\ncccc\r\ndddd\r\n");
 						if (i % hash == 0)
 							System.out.print("+");
 					}

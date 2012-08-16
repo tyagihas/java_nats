@@ -9,17 +9,17 @@ public class PubPerf {
 	public static void main(String[] args) throws Exception {
 		final int loop = (args.length == 0 || args[0] == null) ? 100000 : Integer.parseInt(args[0]);
 		int size = (args.length == 0 || args[1] == null) ? 1 : Integer.parseInt(args[1]);
-		int hash = 2500;
+		final int hash = 2500;
+		String val = "";
+		for(int l = 0; l < size; l++) val+="a";
 		
 		Session session = Session.connect(new Properties());
 		session.start();
 
 		System.out.println("Performing Publish performance test");
 		final long start = System.nanoTime();
-		String val = "";
-		for(int l = 0; l < size; l++) val+="a";
-		
 		for(int i = 1; i <= loop; i++) {
+			// session.publish("hello", null, new Integer(i).toString(), null);
 			session.publish("hello", null, val, null);
 			if (i % hash == 0)
 				System.out.print("+");
