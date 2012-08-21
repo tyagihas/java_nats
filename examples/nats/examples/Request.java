@@ -12,7 +12,7 @@ public class Request {
 		session.start();
 
 		System.out.println("Subscribing...");		
-		session.subscribe("help", session.new RequestEventHandler() {
+		session.subscribe("help", session.new EventHandler() {
 			public void execute(String request, String replyTo) {
 				try {
 					session.publish(replyTo, "I can help!");
@@ -24,8 +24,8 @@ public class Request {
 
 		System.out.println("Sending a request...");		
 		Integer sid = session.request("help", session.new EventHandler() {
-			public void execute(Object o) {
-				System.out.println("Got a response for help : " + o);
+			public void execute(String response) {
+				System.out.println("Got a response for help : " + response);
 				System.exit(0);
 			}
 		});

@@ -21,7 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public final class Session {
 
-	public static final String version = "0.2.5";
+	public static final String version = "0.3";
 	
 	public static final int DEFAULT_PORT = 4222;
 	public static final String DEFAULT_URI = "nats://localhost:" + Integer.toString(DEFAULT_PORT);
@@ -38,15 +38,6 @@ public final class Session {
 
 	public static final int MAX_BUFFER_SIZE = 10 * 1024 * 1024;
     
-	/* Protocol
-	MSG = "MSG\\s+([^\\s\r\n]+)\\s+([^\\s\r\n]+)\\s+(([^\\s\r\n]+)[^\\S\r\n]+)?(\\d+)\r\n/i"
-	OK = "+OK\\s*\r\n/i"
-	ERR = "-ERR\\s+('.+')?\r\n/i"
-	PING = "PING\r\n/i"
-	PONG = "PONG\r\n/i"
-	INFO = "INFO\\s+([^\r\n]+)\r\n/i"
-	*/
-
 	public static final String CR_LF = "\r\n";
 	public static final int CR_LF_LEN = CR_LF.length();
 	public static final String EMPTY = "";
@@ -70,12 +61,10 @@ public final class Session {
 	public static final byte[] PONG_RESPONSE = ("PONG" + CR_LF).getBytes();
 	public static final int PONG_RESPONSE_LEN = PONG_RESPONSE.length;
 
-	// Pedantic Mode support
-	// public static final String Q_SUB = "/^([^\\.\\*>\\s]+|>$|\\*)(\\.([^\\.\\*>\\s]+|>$|\\*))*$/";
-	// public static final String Q_SUB_NO_WC = "/^([^\\.\\*>\\s]+)(\\.([^\\.\\*>\\s]+))*$/";
-
 	private static int numSessions;
 	private static volatile int ssid;
+	private Session self;
+	private Session.EventHandler connectHandler;
 	private Selector selector;
 	private Session.SelectorThread selectorThread;
 
@@ -92,6 +81,8 @@ public final class Session {
 
 	private int msgs_sent;
 	private int bytes_sent;
+	private int msgs_received;
+	private int bytes_received;
 
 	static {
 		ssid = 1;
@@ -123,11 +114,11 @@ public final class Session {
 		if (System.getenv("NATS_MAX_RECONNECT_ATTEMPTS") != null) popts.put("max_reconnect_attempts", Integer.parseInt(System.getenv("NATS_MAX_RECONNECT_ATTEMPTS")));
 		if (System.getenv("NATS_MAX_RECONNECT_TIME_WAIT") != null) popts.put("max_reconnect_time_wait", Integer.parseInt(System.getenv("NATS_MAX_RECONNECT_TIME_WAIT")));
 
-		Session session = new Session(popts);
-		return session;
+		return new Session(popts);
 	}
 	
 	private Session(Properties popts) throws IOException, InterruptedException {
+		self = this;
 		selector = SelectorProvider.provider().openSelector();
 		selectorThread = new SelectorThread();
 		sendBuffer = ByteBuffer.allocateDirect(MAX_BUFFER_SIZE);
@@ -151,8 +142,7 @@ public final class Session {
 			channel.connect(addr);
 			channel.configureBlocking(false);
 			sKey = channel.register(selector, SelectionKey.OP_READ | SelectionKey.OP_WRITE);
-		}
-		catch(IOException ie) {
+		} catch(IOException ie) {
 			ie.printStackTrace();
 			return false;
 		}
@@ -185,7 +175,22 @@ public final class Session {
 	 * @throws InterruptedException
 	 */
 	public void start() throws IOException, InterruptedException {
+		start(null);
+	}
+
+	/**
+	 * Establish a connection to the server and start a background thread for processing incoming and outgoing messages
+	 * @param handler EventHanlder invoked when connection is established.
+	 * @throws IOException
+	 * @throws InterruptedException
+	 */
+	public void start(EventHandler handler) throws IOException, InterruptedException {
+		if (handler != null) {
+			connectHandler = handler;
+			connectHandler.verifyArity();
+		}
 		selectorThread.start();    	
+		
 		this.sendCommand("CONNECT {\"verbose\":" + ((Boolean)opts.get("verbose")).toString() + ",\"pedantic\":" + ((Boolean)opts.get("pedantic")) + "}" + CR_LF);
 		numSessions++;
 	}
@@ -197,8 +202,9 @@ public final class Session {
 	public void stop() throws IOException {
 		channel.close();
 		numSessions--;
-		if (numSessions == 0) selector.close();
+		selector.close();
 		selectorThread.interrupt();
+		timer.purge();
 	}
 
 	/**
@@ -217,6 +223,17 @@ public final class Session {
 	 */
 	public void publish(String subject, String msg) throws IOException {
 		publish(subject, null, msg, null);
+	}
+
+	/**
+	 * Publish a message to the given subject.
+	 * @param subject
+	 * @param msg a message to be delivered to the server
+	 * @param handler event handler is invoked when publish has been processed by the server.
+	 * @throws IOException
+	 */
+	public void publish(String subject, String msg, EventHandler handler) throws IOException {
+		publish(subject, null, msg, handler);
 	}
 
 	/**
@@ -284,21 +301,22 @@ public final class Session {
 	 */
 	public Integer subscribe(String subject, Properties popts, EventHandler handler) throws IOException {
 		Integer sid = ssid++;
-		Subscription sub = new Subscription(subject, handler);
+		Subscription sub = new Subscription(sid, subject, handler);
 
 		if (popts != null) {
 			sub.queue = (popts.getProperty("queue") == null ? " " : (String)popts.getProperty("queue"));
-			sub.max = ((Integer)popts.get("max")).intValue();
+			sub.max = (popts.getProperty("max") == null ? -1 : Integer.parseInt(popts.getProperty("max")));
 		}
 
 		subs.put(sid, sub);
+		sub.handler.verifyArity();
 		sendSubscription(subject, sid, sub);
 
 		return sid;
 	}
 
 	private void sendSubscription(String subject, Integer sid, Subscription sub) throws IOException {
-		sendCommand("SUB " + subject + SPC + sub.queue + sid.toString() + CR_LF);
+		sendCommand("SUB " + subject + SPC + sub.queue + SPC + sid.toString() + CR_LF);
 
 		if (sub.max != -1) this.unsubscribe(sid, sub.max);
 	}
@@ -346,10 +364,7 @@ public final class Session {
 	}
     
 	private void sendCommand(String command) throws IOException {
-		int length = command.length();
-		byte[] data = command.getBytes();
-
-		sendCommand(data, length);
+		sendCommand(command.getBytes(), command.length());
 	}
     
 	private void sendCommand(byte[] data, int length) throws IOException {
@@ -360,17 +375,18 @@ public final class Session {
 					if (sKey.interestOps() == 1) channel.register(selector, 0x5); // read & write mode
 				}
 				break;
-			}
-			catch(BufferOverflowException bof) {}
+			} catch(BufferOverflowException bof) {}
 		}
 	}
     
 	private void sendPing(EventHandler handler) throws IOException {
+		handler.verifyArity();
 		synchronized(pongs) {
 			pongs.add(handler);
 		}
 		synchronized(sendBuffer) {
 			sendBuffer.put(PING_REQUEST, 0, PING_REQUEST_LEN);
+			if (sKey.interestOps() == 1) channel.register(selector, 0x5); // read & write mode
 		}
 	}
     
@@ -446,9 +462,7 @@ public final class Session {
 			
 			try {
 				Thread.sleep(reconnect_time_wait);
-			}
-			catch(InterruptedException ie) {
-			}
+			} catch(InterruptedException ie) {}
 		}
 	}
 
@@ -462,49 +476,70 @@ public final class Session {
 	public void timeout(final Integer sid, long tout, Properties prop, final EventHandler handler) {
 		Subscription sub = subs.get(sid);
 		if (sub == null) return;
-		final boolean auto_unsubscribe = ((Boolean)prop.get("auto_unsubscribe")).booleanValue();
+		
+		handler.verifyArity();
+		
+		boolean au = false;
+		if (prop != null) {
+			au = (prop.get("auto_unsubscribe") == null ? false : ((Boolean)prop.get("auto_unsubscribe")).booleanValue());
+			sub.expected = (prop.get("expected") == null ? -1 : ((Integer)prop.get("expected")).intValue());
+		}
+		final boolean auto_unsubscribe = au;
+		
 		if (sub.task != null) sub.task.cancel();
-
+		
 		final Session parent = this;
 		TimerTask task = new TimerTask() {
 			public void run() {
 				try {
 					if (auto_unsubscribe) parent.unsubscribe(sid);
-				}
-				catch(IOException e) {
+				} catch(IOException e) {
 					e.printStackTrace();
 				}
 				if (handler != null) handler.execute(sid);
 			}
 		}; 
 		timer.schedule(task, tout * 1000);
+		sub.task = task;
 	}
 	
 
 	/**
-	 * Generic event handler can be passed to various operations and invoked when the operation is processed by the server.
+	 * Event handler can be passed to various operations and invoked when the operation is processed by the server.
 	 * @author Teppei Yagihashi
 	 */
+	private static final Class<?>[] ARITY0 = {};
+	private static final Class<?>[] ARITY1 = {String.class};
+	private static final Class<?>[] ARITY2 = {String.class, String.class};
+	private static final Class<?>[] ARITY3 = {String.class, String.class, String.class};
+	private static final Class<?>[] OBJ = {Object.class};
 	public abstract class EventHandler {
-		public Thread caller;
-		/**
-		 * Invoked when the operation is completed.
-		 * @param o typically String is passed.
-		 */
+		private static final String className = "nats.Session$EventHandler";
+		private Thread caller;
+		private int arity;
+		
+		public void execute() {}
+		public void execute(String msg) {}
+		public void execute(String msg, String reply) {}
+		public void execute(String msg, String reply, String subject) {}		
 		public void execute(Object o) {}
-	}
-
-	/**
-	 * Event handler specific to request operation
-	 * @author Teppei Yagihashi
-	 */
-	public class RequestEventHandler extends EventHandler {
-		/**
-		 * Invoked when the request operation is completed.
-		 * @param request message attached by the requester
-		 * @param replyTo requester's inbox subject
-		 */
-		public void execute(String request, String replyTo) {}
+		
+		private void verifyArity() {
+			try {
+				if (!getClass().getMethod("execute", ARITY0).getDeclaringClass().getName().equals(className))
+					arity = 0;
+				else if (!getClass().getMethod("execute", ARITY1).getDeclaringClass().getName().equals(className))
+					arity = 1;
+				else if (!getClass().getMethod("execute", ARITY2).getDeclaringClass().getName().equals(className))
+					arity = 2;
+				else if (!getClass().getMethod("execute", ARITY3).getDeclaringClass().getName().equals(className))
+					arity = 3;
+				else if (!getClass().getMethod("execute", OBJ).getDeclaringClass().getName().equals(className))
+					arity = -1;
+			} catch (Exception e) {
+				e.printStackTrace();
+			}			
+		}
 	}
 
 	// Dummy event handler
@@ -515,14 +550,17 @@ public final class Session {
 	 * @author Teppei Yagihashi
 	 */
 	private class Subscription {
+		public Integer sid = null;
 		public String subject = null;
 		public EventHandler handler = null;
 		public String queue = "";
 		public int max = -1;
 		public int received = 0;
+		public int expected = -1;
 		public TimerTask task = null;
     	
-		public Subscription(String psubject, EventHandler phandler) {
+		public Subscription(Integer psid, String psubject, EventHandler phandler) {
+			sid = psid;
 			subject = psubject;
 			handler = phandler;
 		}
@@ -534,6 +572,8 @@ public final class Session {
 	private final class SelectorThread extends Thread {
 		private byte[] buf = new byte[MAX_BUFFER_SIZE];
 		private int pos;
+		private String subject;
+		private String optReply;
 		private int payload_length;
 		private Subscription sub;
 
@@ -562,11 +602,7 @@ public final class Session {
 					}
 					else if (sKey.isReadable()) processMessage();
 				}
-			}
-			catch(Exception e) {
-				e.printStackTrace();
-				System.exit(1);
-			}	
+			} catch(Exception e) {}	
 		}    	
 		
 		/**
@@ -599,26 +635,67 @@ public final class Session {
 								synchronized(pongs) {
 									handler = pongs.poll();
 								}
-								handler.execute(null);
+								processEvent(null, handler);
 								if (handler.caller != null)
 									handler.caller.interrupt();
 							}
 							else if (comp(buf, PING, 4)) sendCommand(PONG_RESPONSE, PONG_RESPONSE_LEN);
 							else if (comp(buf, ERR, 4)) reconnect();
 							else if (comp(buf, OK, 3)) {/* do nothing for now */}
-							else if (comp(buf, INFO, 4)) {/* do nothing for now */}
+							else if (comp(buf, INFO, 4)) {
+								if (connectHandler != null) 
+									connectHandler.execute((Object)self);
+							}
 						}
 						break;
 					case AWAITING_MSG_PAYLOAD :
 						receiveBuffer.get(buf, 0, payload_length + 2);
-						sub.handler.execute(new String(buf, 0, payload_length));
+						on_msg(new String(buf, 0, payload_length)); 
 						pos = 0;
-						sub.received++;
 						status = AWAITING_CONTROL;					
 						break;
 					}
 				}
 				receiveBuffer.clear();
+			}
+		}
+		
+		private void on_msg(String msg) {
+			msgs_received++;
+			if (msg != null) bytes_received+=msg.length();
+
+			sub.received++;
+			if (sub.max != -1) {
+				if (sub.max < sub.received)
+					return;
+				else if (sub.max == sub.received)
+					subs.remove(sub.sid);
+			}
+			processEvent(msg, sub.handler);
+			
+			if ((sub.task != null) && (sub.received >= sub.expected)) {
+				sub.task.cancel();
+				sub.task = null;
+			}
+		}
+		
+		private void processEvent(String msg, EventHandler handler) {
+			switch(handler.arity) {
+			case 0 :
+				handler.execute();
+				break;
+			case 1 :
+				handler.execute(msg);
+				break;
+			case 2 :
+				handler.execute(msg, optReply);
+				break;
+			case 3 :
+				handler.execute(msg, optReply, subject);
+				break;
+			case -1 :
+				handler.execute((Object)msg);
+				break;
 			}
 		}
 		
@@ -645,11 +722,16 @@ public final class Session {
 			int index = 0, rid = 0, start = 0;
 			for( ; buf[index++] != 0xd; ) {
 				if (buf[index] == 0x20) {
-					if (rid++ == 2)
-						sub = (Subscription)subs.get(Integer.valueOf(new String(buf,start,index-start)));						
+					if (rid == 1)
+						subject = new String(new String(buf,start,index-start));						
+					else if (rid == 2) 
+						sub = subs.get(Integer.valueOf(new String(buf,start,index-start)));
+					else if (rid == 3)
+						optReply = new String(new String(buf,start,index-start));
+					rid++;
 					start = ++index;
 				}
-			}			
+			}
 			payload_length = Integer.parseInt(new String(buf,start,--index-start));
 		}		
 	}    
