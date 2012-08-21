@@ -5,7 +5,7 @@ import java.io.InputStreamReader;
 import java.util.Properties;
 import nats.Session;
 
-public class Sub {
+public class QueueSub {
 
 	public static void main(String[] args) throws Exception {
 	    BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(System.in));
@@ -13,7 +13,9 @@ public class Sub {
 		session.start();
 
 		System.out.println("Listening on : " + args[0]);
-		session.subscribe(args[0], session.new EventHandler() {
+		Properties opt = new Properties();
+		opt.setProperty("queue", "job.workers");
+		session.subscribe(args[0], opt, session.new EventHandler() {
 			public void execute(String msg) {
 				System.out.println("Received update : " + msg);
 			}
