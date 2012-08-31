@@ -17,14 +17,14 @@ session.start();
 session.publish("foo", "Hello World!", null, null);
 
 // Simple Subscriber
-session.subscribe("foo", session.new EventHandler() {
+session.subscribe("foo", new MsgHandler() {
 	public void execute(String msg) {
 		System.out.println("Received a message: " + msg);
 	}
 });
 
 // Unsubscribing
-Integer sid = session.subscribe("foo", session.new EventHandler() {
+Integer sid = session.subscribe("foo", new MsgHandler() {
 	public void execute(String msg) {
 		System.out.println("Received a message: " + msg);
 	}
@@ -32,14 +32,14 @@ Integer sid = session.subscribe("foo", session.new EventHandler() {
 session.unsubscribe(sid);
 
 // Requests
-sid = session.request("help", session.new EventHandler() {
+sid = session.request("help", new MsgHandler() {
 	public void execute(String response) {
 		System.out.println("Got a response for help : " + reponse);
 	}
 });
 		
 // Replies
-session.subscribe("help", session.new RequestEventHandler() {
+session.subscribe("help", new MsgHandler() {
 	public void execute(String request, String replyTo) {
 		try {
 			session.publish(replyTo, "I can help!");
@@ -57,19 +57,19 @@ session.stop();
 
 ```javascript
 // "*" matches any token, at any level of the subject.
-session.subscribe("foo.*.baz", session.new EventHandler() {
+session.subscribe("foo.*.baz", new MsgHandler() {
 	public void execute(String msg, String reply, String subject) {
 		System.out.println("Received a message on [" + subject + "] : " + msg);
 	}
 });
 
-session.subscribe("foo.bar.*", session.new EventHandler() {
+session.subscribe("foo.bar.*", new MsgHandler() {
 	public void execute(String msg, String reply, String subject) {
 		System.out.println("Received a message on [" + subject + "] : " + msg);
 	}
 });
 
-session.subscribe("*.bar.*", session.new EventHandler() {
+session.subscribe("*.bar.*", new MsgHandler() {
 	public void execute(String msg, String reply, String subject) {
 		System.out.println("Received a message on [" + subject + "] : " + msg);
 	}
@@ -77,7 +77,7 @@ session.subscribe("*.bar.*", session.new EventHandler() {
 
 // ">" matches any length of the tail of a subject, and can only be the last token
 // E.g. 'foo.>' will match 'foo.bar', 'foo.bar.baz', 'foo.foo.bar.bax.22'
-session.subscribe("foo.>", session.new EventHandler() {
+session.subscribe("foo.>", new MsgHandler() {
 	public void execute(String msg, String reply, String subject) {
 		System.out.println("Received a message on [" + subject + "] : " + msg);
 	}
@@ -93,7 +93,7 @@ session.subscribe("foo.>", session.new EventHandler() {
 // Normal subscribers will continue to work as expected.
 Properties opt = new Properties();
 opt.setProperty("queue", "job.workers");
-session.subscribe(args[0], opt, session.new EventHandler() {
+session.subscribe(args[0], opt, new MsgHandler() {
 	public void execute(String msg) {
 		System.out.println("Received update : " + msg);
 	}
@@ -104,20 +104,20 @@ session.subscribe(args[0], opt, session.new EventHandler() {
 
 ```javascript
 // Publish with closure, callback fires when server has processed the message
-session.publish("foo", "You done?", session.new EventHandler() {
+session.publish("foo", "You done?", new MsgHandler() {
 	public void execute() {
 		System.out.println("Message processed!");
 	}
 });
 
 // Timeouts for subscriptions
-Integer sid = session.subscribe("foo", session.new EventHandler() {
+Integer sid = session.subscribe("foo", new MsgHandler() {
 	int received = 0;
 	public void execute() {
 		received++;
 	}
 });
-session.timeout(sid, TIMEOUT_IN_SECS, session.new EventHandler() {
+session.timeout(sid, TIMEOUT_IN_SECS, new MsgHandler() {
 	public void execute() {
 		timeout_recv = true;
 	}
@@ -126,7 +126,7 @@ session.timeout(sid, TIMEOUT_IN_SECS, session.new EventHandler() {
 // Timeout unless a certain number of messages have been received
 Properties opt = new Properties();
 opt.put("expected", new Integer(2));
-session.timeout(sid, 10, opt, session.new EventHandler() {
+session.timeout(sid, 10, opt, new MsgHandler() {
 	public void execute(Object o) {
 		timeout_recv = true;
 	}
@@ -136,7 +136,7 @@ session.timeout(sid, 10, opt, session.new EventHandler() {
 session.unsubscribe(sid, MAX_WANTED)
 
 // Multiple connections
-session1.subscribe("test", session.new EventHandler() {
+session1.subscribe("test", new MsgHandler() {
 	public void execute(String msg) {
     	System.out.println("received : " + msg);
     }
@@ -144,7 +144,7 @@ session1.subscribe("test", session.new EventHandler() {
 
 // Form second connection to send message on
 Session session2 = Session.connect(new Properties());
-session2.start(session2.new EventHandler() {
+session2.start(new MsgHandler() {
 	public void execute(Object o) {
 		Session session = (Session)o;
 		try {
