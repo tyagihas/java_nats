@@ -4,11 +4,37 @@ A Java client for the [NATS messaging system](https://github.com/derekcollison/n
 
 [![Build Status](https://secure.travis-ci.org/derekcollison/node_nats.png)](http://travis-ci.org/derekcollison/node_nats)
 
+## Supported Platforms
+
+```javascript
+java_nats currently supports following Java Platforms :
+
+- Java Platform, Standard Edition 6 (Java SE 6)
+- Java Platform, Standard Edition 7 (Java SE 7)
+```
+
+## Getting Started
+
+```javascript
+Download source files and "cd" to java_nats root directory :
+% cd <java_nats>
+
+Compile:
+% javac -d ./bin ./lib/org/nats/*.java
+% export CLASSPATH=./bin
+% javac -d ./bin ./benchmark/org/nats/benchmark/*.java
+% javac -d ./bin ./examples/org/nats/examples/*.java
+
+Run:
+cd ./bin
+% ./PubPerf.sh 100000 16
+```
+
 ## Basic Usage
 
 ```javascript
 import java.util.Properties;
-import nats.Session;
+import org.nats.*;
 ...
 Session session = Session.connect(new Properties());
 session.start();

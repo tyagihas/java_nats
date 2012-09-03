@@ -4,5 +4,5 @@ export CLASSPATH=.
 # -XX:+UseConcMarkSweepGC -XX:+UseParNewGC
 # -XX:+UnlockExperimentalVMOptions -XX:+UseG1GC
 # -XX:+TieredCompilation
-java -XX:+UseConcMarkSweepGC -XX:+UseParNewGC -XX:+TieredCompilation -Xverify:none -Xss256k -ms512m -mx512m nats.benchmark.PubPerf 500000 1
+java -XX:+UseConcMarkSweepGC -XX:+UseParNewGC -XX:+TieredCompilation -Xverify:none -Xss256k -ms512m -mx512m org.nats.benchmark.PubPerf $1 $2
 

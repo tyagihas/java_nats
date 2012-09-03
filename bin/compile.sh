@@ -1,3 +1,3 @@
 
-javac -d . ../lib/nats/Session.java
-javac -d . ../benchmark/nats/benchmark/*.java
+javac -d . ../lib/org/nats/Session.java
+javac -d . ../benchmark/org/nats/benchmark/*.java

@@ -5,13 +5,12 @@ import java.net.InetSocketAddress;
 import java.nio.BufferOverflowException;
 import java.nio.ByteBuffer;
 import java.nio.channels.*;
-import java.nio.channels.spi.SelectorProvider;
 import java.util.*;
 import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Session represents a bidirectional channel to NATS server. Event handler may be attached to each operation
+ * Session represents a bidirectional channel to NATS server. Message handler may be attached to each operation
  * which is invoked when the operation is processed by the server. A client JVM may create multiple Session objects
  * by calling {@link #connect(java.util.Properties popts)} multiple times.
  * 
@@ -20,7 +19,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class Session {
 
-	public static final String version = "0.4";
+	public static final String version = "0.4.1";
 	
 	public static final int DEFAULT_PORT = 4222;
 	public static final String DEFAULT_URI = "nats://localhost:" + Integer.toString(DEFAULT_PORT);
@@ -83,7 +82,7 @@ public final class Session {
 	private ConcurrentHashMap<Integer, Subscription> subs;    
 	private LinkedList<MsgHandler> pongs;
 	private Timer timer;
-	private long lastFlush;
+	private long lastOverflow;
 
 	private int msgs_sent;
 	private int bytes_sent;
@@ -391,6 +390,15 @@ public final class Session {
 				break;
 			} catch(BufferOverflowException bofe) {
 				flushPending();
+
+				// Reallocating send buffer if bufferoverflow occurs too frequently
+				if (sendBufferSize < MAX_BUFFER_SIZE) {
+					if (System.currentTimeMillis() - lastOverflow < REALLOCATION_THRESHOLD) {
+						sendBufferSize += REALLOCATION_SIZE;
+						sendBuffer = ByteBuffer.allocateDirect(sendBufferSize);
+					}
+					lastOverflow = System.currentTimeMillis();
+				}
 			}
 		}		
 	}
@@ -404,15 +412,6 @@ public final class Session {
 					channel.write(sendBuffer);
 				}		
 				sendBuffer.clear();
-
-				// Reallocating send buffer if flush occurs too frequently
-				if (sendBufferSize < MAX_BUFFER_SIZE) {
-					if (System.currentTimeMillis() - lastFlush < REALLOCATION_THRESHOLD) {
-						sendBufferSize += REALLOCATION_SIZE;
-						sendBuffer = ByteBuffer.allocateDirect(sendBufferSize);
-					}
-					lastFlush = System.currentTimeMillis();
-				}
 			}
 		}
 	}
@@ -656,6 +655,7 @@ public final class Session {
 				}
 				receiveBuffer.clear();
 				
+				// Reallocation occurs only when receiveBuffer is empty.
 				if (reallocate) {
 					receiveBufferSize += REALLOCATION_SIZE;
 					receiveBuffer = ByteBuffer.allocateDirect(receiveBufferSize);
