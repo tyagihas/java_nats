@@ -19,7 +19,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class Session {
 
-	public static final String version = "0.4.1";
+	public static final String version = "0.4.2";
 	
 	public static final int DEFAULT_PORT = 4222;
 	public static final String DEFAULT_URI = "nats://localhost:" + Integer.toString(DEFAULT_PORT);
@@ -35,10 +35,9 @@ public final class Session {
 	public static final int DEFAULT_MAX_RECONNECT_ATTEMPTS = 10;
 	
 	public static final int MAX_PENDING_SIZE = 32768;
-	public static final int INIT_BUFFER_SIZE = 2 * 1024 * 1024;
-	public static final int REALLOCATION_SIZE = 2 * 1024 * 1024;
-	public static final int MAX_BUFFER_SIZE = 10 * 1024 * 1024;
-	public static final long REALLOCATION_THRESHOLD = 5 * 1000; // 5 seconds
+	public static final int INIT_BUFFER_SIZE = 1 * 1024 * 1024; //  1 Mb
+	public static final int MAX_BUFFER_SIZE = 16 * 1024 * 1024; // 16 Mb
+	public static final long REALLOCATION_THRESHOLD = 5 * 1000; //  5 seconds
     
 	public static final String CR_LF = "\r\n";
 	public static final int CR_LF_LEN = CR_LF.length();
@@ -385,7 +384,7 @@ public final class Session {
 						}, 1);
 						return;
 					}
-					if ((priority) || (sendBuffer.position() > MAX_PENDING_SIZE)) flushPending();
+					if (priority || (sendBuffer.position() > MAX_PENDING_SIZE)) flushPending();
 				}
 				break;
 			} catch(BufferOverflowException bofe) {
@@ -394,7 +393,7 @@ public final class Session {
 				// Reallocating send buffer if bufferoverflow occurs too frequently
 				if (sendBufferSize < MAX_BUFFER_SIZE) {
 					if (System.currentTimeMillis() - lastOverflow < REALLOCATION_THRESHOLD) {
-						sendBufferSize += REALLOCATION_SIZE;
+						sendBufferSize *= 2;
 						sendBuffer = ByteBuffer.allocateDirect(sendBufferSize);
 					}
 					lastOverflow = System.currentTimeMillis();
@@ -657,7 +656,7 @@ public final class Session {
 				
 				// Reallocation occurs only when receiveBuffer is empty.
 				if (reallocate) {
-					receiveBufferSize += REALLOCATION_SIZE;
+					receiveBufferSize *= 2;
 					receiveBuffer = ByteBuffer.allocateDirect(receiveBufferSize);
 					reallocate = false;
 				}
