@@ -11,21 +11,21 @@ public class MultiConnection {
 
 	public static void main(String[] args) throws Exception {
 	    BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(System.in));
-		Session session1 = Session.connect(new Properties());
-		session1.start();
+		Connection conn1 = Connection.connect(new Properties());
+		conn1.start();
 
-		session1.subscribe("test", new MsgHandler() {
+		conn1.subscribe("test", new MsgHandler() {
 			public void execute(String msg, String reply, String subject) {
 				System.out.println("Received update on " + subject + " : " + msg);
 			}
 		});
 
-		Session session2 = Session.connect(new Properties());
-		session2.start(new MsgHandler() {
+		Connection conn2 = Connection.connect(new Properties());
+		conn2.start(new MsgHandler() {
 			public void execute(Object o) {
-				Session session = (Session)o;
+				Connection conn = (Connection)o;
 				try {
-					session.publish("test", "Hello World!");
+					conn.publish("test", "Hello World!");
 				} catch (IOException e) {
 					e.printStackTrace();
 				}
@@ -35,10 +35,10 @@ public class MultiConnection {
 		System.out.println("\nPress enter to exit.");
 		bufferedReader.readLine();
 		
-		session1.flush();
-		session1.stop();
-		session2.flush();
-		session2.stop();
+		conn1.flush();
+		conn1.stop();
+		conn2.flush();
+		conn2.stop();
 		System.exit(0);
 	}
 }

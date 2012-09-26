@@ -14,19 +14,18 @@ public class PubPerf {
 		for(int l = 0; l < size; l++) val+="a";
 		
 		Properties prop = new Properties();
-		Session session = Session.connect(prop);
-		session.start();
+		Connection conn = Connection.connect(prop);
+		conn.start();
 
 		System.out.println("Performing Publish performance test");
 		final long start = System.nanoTime();
 		for(int i = 1; i <= loop; i++) {
-			session.publish("hello", null, val, null);
-			// session.publish("hello", null, new Integer(i).toString(), null);
+			conn.publish("hello", null, val, null);
 			if (i % hash == 0)
 				System.out.print("+");
 		}
 		
-		session.flush(new MsgHandler() {
+		conn.flush(new MsgHandler() {
 			public void execute(Object o) {
 				double elapsed = System.nanoTime() - start;
 				System.out.println("\nelapsed : " + Double.toString(elapsed / 1000000000) + " seconds");
@@ -34,7 +33,7 @@ public class PubPerf {
 			}
 		});
 		
-		session.stop();		
+		conn.stop();		
 		System.exit(0);
-	}
+	}	
 }

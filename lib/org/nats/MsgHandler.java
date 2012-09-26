@@ -15,13 +15,17 @@ public abstract class MsgHandler {
 	public Thread caller;
 	public int arity;
 	
+	public MsgHandler() {
+		verifyArity();
+	}
+	
 	public void execute() {}
 	public void execute(String msg) {}
 	public void execute(String msg, String reply) {}
 	public void execute(String msg, String reply, String subject) {}		
 	public void execute(Object o) {}
 	
-	public void verifyArity() {
+	private void verifyArity() {
 		try {
 			if (!getClass().getMethod("execute", ARITY0).getDeclaringClass().getName().equals(className))
 				arity = 0;

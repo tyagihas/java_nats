@@ -15,14 +15,14 @@ public class PubSubPerf {
 		for(int l = 0; l < size; l++) buf.append("a");
 		final String val = buf.toString();
 
-		final Session session1 = Session.connect(new Properties());
-		session1.start();
-		final Session session2 = Session.connect(new Properties());
-		session2.start();
+		final Connection conn1 = Connection.connect(new Properties());
+		conn1.start();
+		final Connection conn2 = Connection.connect(new Properties());
+		conn2.start();
 
 		System.out.println("Performing Publish/Subscribe performance test");
 		final long start = System.nanoTime();
-		session1.subscribe("test", new MsgHandler() {
+		conn1.subscribe("test", new MsgHandler() {
 			int received = 0;
 			public void execute(Object o) {
 				received++;
@@ -39,17 +39,17 @@ public class PubSubPerf {
 			}
 		});
 		
-		session1.flush(new MsgHandler() {
+		conn1.flush(new MsgHandler() {
 			public void execute(Object o) {
 				try {
 					for(int i = 1; i <= loop; i++) {
-						session2.publish("test", val);
-						// session2.publish("test", "aaaa\r\nbbbb\r\ncccc\r\ndddd\r\n");
-						// session2.publish("test", new Integer(i).toString());
+						conn2.publish("test", val);
+						// conn2.publish("test", "aaaa\r\nbbbb\r\ncccc\r\ndddd\r\n");
+						// conn2.publish("test", new Integer(i).toString());
 						if (i % hash == 0)
 							System.out.print("+");
 					}
-					session2.flush();
+					conn2.flush();
 				} catch(Exception e) {e.printStackTrace();}
 			}
 		});

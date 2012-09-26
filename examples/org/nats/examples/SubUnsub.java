@@ -11,11 +11,11 @@ public class SubUnsub {
 	public static void main(String[] args) throws Exception {
 		
 	    BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(System.in));
-		Session session = Session.connect(new Properties());
-		session.start();
+		Connection conn = Connection.connect(new Properties());
+		conn.start();
 
 		System.out.println("Subscribing...");
-		Integer sid = session.subscribe("hello", new MsgHandler() {
+		Integer sid = conn.subscribe("hello", new MsgHandler() {
 			public void execute(Object o) {
 				System.out.println("Received update : " + (String)o);
 			}
@@ -23,9 +23,9 @@ public class SubUnsub {
 		
 		System.out.println("Press Enter to unsubscribe");
 		bufferedReader.readLine();
-		session.unsubscribe(sid);
+		conn.unsubscribe(sid);
 		
-		session.stop();
+		conn.stop();
 		System.exit(0);
 	}
 }

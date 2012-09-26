@@ -10,12 +10,12 @@ public class Expected {
 
 	public static void main(String[] args) throws Exception {
 	    BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(System.in));
-		Session session = Session.connect(new Properties());
-		session.start();
+		Connection conn = Connection.connect(new Properties());
+		conn.start();
 
 		System.out.println("Listening on : " + args[0]);
 		System.out.println("Will timeout in 10 seconds unless 2 messages are received");
-		Integer sid = session.subscribe(args[0], new MsgHandler() {
+		Integer sid = conn.subscribe(args[0], new MsgHandler() {
 			int received = 0;
 			public void execute() {
 				received++;
@@ -24,7 +24,7 @@ public class Expected {
 		});
 		Properties opt = new Properties();
 		opt.put("expected", new Integer(2));
-		session.timeout(sid, 10, opt, new MsgHandler() {
+		conn.timeout(sid, 10, opt, new MsgHandler() {
 			public void execute(Object o) {
 				System.out.println("Timeout waiting for a message!");
 			}
@@ -33,8 +33,8 @@ public class Expected {
 		System.out.println("\nPress enter to exit.");
 		bufferedReader.readLine();
 		
-		session.flush();
-		session.stop();
+		conn.flush();
+		conn.stop();
 		
 		System.exit(0);
 	}

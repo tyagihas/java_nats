@@ -10,13 +10,13 @@ public class QueueSub {
 
 	public static void main(String[] args) throws Exception {
 	    BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(System.in));
-		Session session = Session.connect(new Properties());
-		session.start();
+		Connection conn = Connection.connect(new Properties());
+		conn.start();
 
 		System.out.println("Listening on : " + args[0]);
 		Properties opt = new Properties();
 		opt.setProperty("queue", "job.workers");
-		session.subscribe(args[0], opt, new MsgHandler() {
+		conn.subscribe(args[0], opt, new MsgHandler() {
 			public void execute(String msg) {
 				System.out.println("Received update : " + msg);
 			}
@@ -25,8 +25,8 @@ public class QueueSub {
 		System.out.println("\nPress enter to exit.");
 		bufferedReader.readLine();
 		
-		session.flush();
-		session.stop();
+		conn.flush();
+		conn.stop();
 		
 		System.exit(0);
 	}

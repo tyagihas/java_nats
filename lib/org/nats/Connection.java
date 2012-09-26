@@ -10,21 +10,19 @@ import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Session represents a bidirectional channel to NATS server. Message handler may be attached to each operation
- * which is invoked when the operation is processed by the server. A client JVM may create multiple Session objects
+ * Connection represents a bidirectional channel to NATS server. Message handler may be attached to each operation
+ * which is invoked when the operation is processed by the server. A client JVM may create multiple Connection objects
  * by calling {@link #connect(java.util.Properties popts)} multiple times.
  * 
  * @author Teppei Yagihashi
  *
  */
-public final class Session {
+public final class Connection {
 
-	public static final String version = "0.4.2";
+	public static final String version = "0.4.3";
 	
 	public static final int DEFAULT_PORT = 4222;
 	public static final String DEFAULT_URI = "nats://localhost:" + Integer.toString(DEFAULT_PORT);
-
-	public static final int MAX_CONTROL_LINE_SIZE = 512;
 
 	// Parser state
 	public static final int AWAITING_CONTROL = 0;
@@ -35,9 +33,9 @@ public final class Session {
 	public static final int DEFAULT_MAX_RECONNECT_ATTEMPTS = 10;
 	
 	public static final int MAX_PENDING_SIZE = 32768;
-	public static final int INIT_BUFFER_SIZE = 1 * 1024 * 1024; //  1 Mb
+	public static final int INIT_BUFFER_SIZE = 1 * 1024 * 1024; // 1 Mb
 	public static final int MAX_BUFFER_SIZE = 16 * 1024 * 1024; // 16 Mb
-	public static final long REALLOCATION_THRESHOLD = 5 * 1000; //  5 seconds
+	public static final long REALLOCATION_THRESHOLD = 5 * 1000; // 5 seconds
     
 	public static final String CR_LF = "\r\n";
 	public static final int CR_LF_LEN = CR_LF.length();
@@ -62,20 +60,17 @@ public final class Session {
 	public static final byte[] PONG_RESPONSE = ("PONG" + CR_LF).getBytes();
 	public static final int PONG_RESPONSE_LEN = PONG_RESPONSE.length;
 
-	private static int numSessions;
+	private static int numConnections;
 	private static volatile int ssid;
-	private Session self;
+	private Connection self;
 	private MsgHandler connectHandler;
-	private Session.MsgProcessor processor;
+	private Connection.MsgProcessor processor;
 
 	private Properties opts;
 	private InetSocketAddress addr;
 	private SocketChannel channel;
-	private SelectionKey sKey;
 	private ByteBuffer sendBuffer;
-	private int sendBufferSize = INIT_BUFFER_SIZE;
 	private ByteBuffer receiveBuffer;
-	private int receiveBufferSize = INIT_BUFFER_SIZE;
 	
 	private int status;
 	private ConcurrentHashMap<Integer, Subscription> subs;    
@@ -90,15 +85,15 @@ public final class Session {
 
 	static {
 		ssid = 1;
-		numSessions = 0;
+		numConnections = 0;
 	}
 
 	/** 
-	 * Create and return a Session with various attributes. 
+	 * Create and return a Connection with various attributes. 
 	 * @param popts Properties object containing connection attributes
-	 * @return newly created Session object
+	 * @return newly created Connection object
 	 */
-	public static Session connect(Properties popts) throws IOException, InterruptedException {
+	public static Connection connect(Properties popts) throws IOException, InterruptedException {
 		// Defaults
 		if (!popts.contains("verbose")) popts.put("verbose", new Boolean(false));
 		if (!popts.contains("pedantic")) popts.put("pedantic", new Boolean(false));
@@ -118,10 +113,10 @@ public final class Session {
 		if (System.getenv("NATS_MAX_RECONNECT_ATTEMPTS") != null) popts.put("max_reconnect_attempts", Integer.parseInt(System.getenv("NATS_MAX_RECONNECT_ATTEMPTS")));
 		if (System.getenv("NATS_MAX_RECONNECT_TIME_WAIT") != null) popts.put("max_reconnect_time_wait", Integer.parseInt(System.getenv("NATS_MAX_RECONNECT_TIME_WAIT")));
 
-		return new Session(popts);
+		return new Connection(popts);
 	}
 	
-	private Session(Properties popts) throws IOException, InterruptedException {
+	private Connection(Properties popts) throws IOException, InterruptedException {
 		self = this;
 		processor = new MsgProcessor();
 		sendBuffer = ByteBuffer.allocateDirect(INIT_BUFFER_SIZE);
@@ -134,7 +129,7 @@ public final class Session {
 		opts = popts;
 		String[] uri = ((String)opts.get("uri")).split(":");
 		addr = new InetSocketAddress(uri[1].substring(2, uri[1].length()), Integer.parseInt(uri[2]));
-		timer = new Timer("NATS_Timer-" + numSessions);
+		timer = new Timer("NATS_Timer-" + numConnections);
 
 		connect();
 	}
@@ -186,14 +181,22 @@ public final class Session {
 	 * @throws InterruptedException
 	 */
 	public void start(MsgHandler handler) throws IOException, InterruptedException {
-		if (handler != null) {
+		if (handler != null)
 			connectHandler = handler;
-			connectHandler.verifyArity();
-		}
 		processor.start();    	
+		sendConnectCommand();
+		numConnections++;
+	}
+	
+	private void sendConnectCommand() throws IOException {
+		StringBuffer sb = new StringBuffer("CONNECT {\"verbose\":");
+		sb.append(((Boolean)opts.get("verbose")).toString());
+		sb.append(",\"pedantic\":").append((Boolean)opts.get("pedantic"));
+		if (opts.get("user") != null) sb.append(",\"user\":").append((String)opts.getProperty("user"));
+		if (opts.get("pass") != null) sb.append(",\"pass\":").append((String)opts.getProperty("pass"));
+		sb.append("}").append(CR_LF);
 		
-		this.sendCommand("CONNECT {\"verbose\":" + ((Boolean)opts.get("verbose")).toString() + ",\"pedantic\":" + ((Boolean)opts.get("pedantic")) + "}" + CR_LF);
-		numSessions++;
+		sendCommand(sb.toString());
 	}
 
 	/**
@@ -203,7 +206,7 @@ public final class Session {
 	public void stop() throws IOException {
 		flushPending();
 		channel.close();
-		numSessions--;
+		numConnections--;
 		processor.interrupt();
 		timer.purge();
 	}
@@ -310,7 +313,6 @@ public final class Session {
 		}
 
 		subs.put(sid, sub);
-		sub.handler.verifyArity();
 		sendSubscription(subject, sid, sub);
 
 		return sid;
@@ -325,7 +327,7 @@ public final class Session {
 	private void sendSubscirptions() throws IOException {
 		Entry<Integer, Subscription> entry = null;
     	
-		for(Iterator<Entry<Integer, Session.Subscription>> iter = subs.entrySet().iterator(); iter.hasNext();) {
+		for(Iterator<Entry<Integer, Connection.Subscription>> iter = subs.entrySet().iterator(); iter.hasNext();) {
 			entry = iter.next();
 			sendSubscription(entry.getValue().subject, entry.getKey(), entry.getValue());
 		}
@@ -389,13 +391,10 @@ public final class Session {
 				break;
 			} catch(BufferOverflowException bofe) {
 				flushPending();
-
 				// Reallocating send buffer if bufferoverflow occurs too frequently
-				if (sendBufferSize < MAX_BUFFER_SIZE) {
-					if (System.currentTimeMillis() - lastOverflow < REALLOCATION_THRESHOLD) {
-						sendBufferSize *= 2;
-						sendBuffer = ByteBuffer.allocateDirect(sendBufferSize);
-					}
+				if (sendBuffer.capacity() < MAX_BUFFER_SIZE) {
+					if ((System.currentTimeMillis() - lastOverflow) < REALLOCATION_THRESHOLD)
+						sendBuffer = ByteBuffer.allocateDirect(sendBuffer.capacity()*2);
 					lastOverflow = System.currentTimeMillis();
 				}
 			}
@@ -416,7 +415,6 @@ public final class Session {
 	}
 	
 	private void sendPing(MsgHandler handler) throws IOException {
-		handler.verifyArity();
 		synchronized(pongs) {
 			pongs.add(handler);
 		}
@@ -462,7 +460,7 @@ public final class Session {
 
 	/**
 	 * Flush buffered messages with a specified event handler.
-	 * @param event handler is invoked when flush is completed.
+	 * @param handler is invoked when flush is completed.
 	 */
 	public void flush(MsgHandler handler) throws IOException {
 		handler.caller = Thread.currentThread();
@@ -491,8 +489,6 @@ public final class Session {
 		Subscription sub = subs.get(sid);
 		if (sub == null) return;
 		
-		handler.verifyArity();
-		
 		boolean au = false;
 		if (prop != null) {
 			au = (prop.get("auto_unsubscribe") == null ? false : ((Boolean)prop.get("auto_unsubscribe")).booleanValue());
@@ -502,7 +498,7 @@ public final class Session {
 		
 		if (sub.task != null) sub.task.cancel();
 		
-		final Session parent = this;
+		final Connection parent = this;
 		TimerTask task = new TimerTask() {
 			public void run() {
 				try {
@@ -525,11 +521,12 @@ public final class Session {
 				int reconnect_time_wait = ((Integer)opts.get("reconnect_time_wait")).intValue();
 			
 				for(int i = 0; i < max_reconnect_attempts; i++) {
+					System.out.println("Reconnecting : " + i);
 					channel.close();
 					connect();
 				
 					if (isConnected()) {
-						sendCommand("CONNECT {\"verbose\":" + ((Boolean)opts.get("verbose")).toString() + ",\"pedantic\":" + ((Boolean)opts.get("pedantic")) + "}" + CR_LF);
+						sendConnectCommand();
 						sendSubscirptions();
 						flushPending();				
 						break;
@@ -537,9 +534,7 @@ public final class Session {
 					Thread.sleep(reconnect_time_wait);
 				}
 			}
-			catch(Exception e) {
-				e.printStackTrace();
-			}
+			catch(Exception e) {e.printStackTrace();}
 		}
 	}
 	
@@ -572,7 +567,7 @@ public final class Session {
 	 * @author Teppei Yagihashi
 	 */
 	private final class MsgProcessor extends Thread {
-		private byte[] buf = new byte[receiveBufferSize];
+		private byte[] buf = new byte[INIT_BUFFER_SIZE];
 		private int pos;
 		private String subject;
 		private String optReply;
@@ -583,7 +578,7 @@ public final class Session {
 		private boolean reallocate;
 
 		public MsgProcessor() {
-			for(int l = 0; l < receiveBufferSize; l++)
+			for(int l = 0; l < INIT_BUFFER_SIZE; l++)
 				buf[l] = '\0';		
 			pos = 0;
 			payload_length = -1;
@@ -656,8 +651,7 @@ public final class Session {
 				
 				// Reallocation occurs only when receiveBuffer is empty.
 				if (reallocate) {
-					receiveBufferSize *= 2;
-					receiveBuffer = ByteBuffer.allocateDirect(receiveBufferSize);
+					receiveBuffer = ByteBuffer.allocateDirect(receiveBuffer.capacity()*2);
 					reallocate = false;
 				}
 			}
@@ -666,7 +660,7 @@ public final class Session {
 		// Reallocating receive buffer if message truncation occurs too frequently
 		private boolean verifyTruncation() {
 			boolean result = false;
-			if (receiveBufferSize < MAX_BUFFER_SIZE) {	
+			if (receiveBuffer.capacity() < MAX_BUFFER_SIZE) {	
 				if (System.currentTimeMillis() - lastTruncated < REALLOCATION_THRESHOLD)
 					result = true;
 			}

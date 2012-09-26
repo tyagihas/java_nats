@@ -36,66 +36,66 @@ cd ./bin
 import java.util.Properties;
 import org.nats.*;
 ...
-Session session = Session.connect(new Properties());
-session.start();
+Connection conn = Connection.connect(new Properties());
+conn.start();
 
 // Simple Publisher
-session.publish("foo", "Hello World!", null, null);
+conn.publish("foo", "Hello World!", null, null);
 
 // Simple Subscriber
-session.subscribe("foo", new MsgHandler() {
+conn.subscribe("foo", new MsgHandler() {
 	public void execute(String msg) {
 		System.out.println("Received a message: " + msg);
 	}
 });
 
 // Unsubscribing
-Integer sid = session.subscribe("foo", new MsgHandler() {
+Integer sid = conn.subscribe("foo", new MsgHandler() {
 	public void execute(String msg) {
 		System.out.println("Received a message: " + msg);
 	}
 });		
-session.unsubscribe(sid);
+conn.unsubscribe(sid);
 
 // Requests
-sid = session.request("help", new MsgHandler() {
+sid = conn.request("help", new MsgHandler() {
 	public void execute(String response) {
 		System.out.println("Got a response for help : " + reponse);
 	}
 });
 		
 // Replies
-session.subscribe("help", new MsgHandler() {
+conn.subscribe("help", new MsgHandler() {
 	public void execute(String request, String replyTo) {
 		try {
-			session.publish(replyTo, "I can help!");
+			conn.publish(replyTo, "I can help!");
 		} catch (IOException e) {
 			e.printStackTrace();
 		}				
 	}
 });		
 
-session.flush();
-session.stop();
+conn.flush();
+conn.stop();
 ```
 
 ## Wildcard Subcriptions
 
 ```javascript
 // "*" matches any token, at any level of the subject.
-session.subscribe("foo.*.baz", new MsgHandler() {
+conn.subscribe("foo.*.baz", new MsgHandler() {
 	public void execute(String msg, String reply, String subject) {
 		System.out.println("Received a message on [" + subject + "] : " + msg);
 	}
 });
 
-session.subscribe("foo.bar.*", new MsgHandler() {
+conn.subscribe("foo.bar.*", new MsgHandler() {
 	public void execute(String msg, String reply, String subject) {
 		System.out.println("Received a message on [" + subject + "] : " + msg);
 	}
 });
 
-session.subscribe("*.bar.*", new MsgHandler() {
+conn.subscribe("*.bar.*", new MsgHandler() {
 	public void execute(String msg, String reply, String subject) {
 		System.out.println("Received a message on [" + subject + "] : " + msg);
 	}
@@ -103,7 +103,7 @@ session.subscribe("*.bar.*", new MsgHandler() {
 
 // ">" matches any length of the tail of a subject, and can only be the last token
 // E.g. 'foo.>' will match 'foo.bar', 'foo.bar.baz', 'foo.foo.bar.bax.22'
-session.subscribe("foo.>", new MsgHandler() {
+conn.subscribe("foo.>", new MsgHandler() {
 	public void execute(String msg, String reply, String subject) {
 		System.out.println("Received a message on [" + subject + "] : " + msg);
 	}
@@ -119,7 +119,7 @@ session.subscribe("foo.>", new MsgHandler() {
 // Normal subscribers will continue to work as expected.
 Properties opt = new Properties();
 opt.setProperty("queue", "job.workers");
-session.subscribe(args[0], opt, new MsgHandler() {
+conn.subscribe(args[0], opt, new MsgHandler() {
 	public void execute(String msg) {
 		System.out.println("Received update : " + msg);
 	}
@@ -130,20 +130,20 @@ session.subscribe(args[0], opt, new MsgHandler() {
 
 ```javascript
 // Publish with closure, callback fires when server has processed the message
-session.publish("foo", "You done?", new MsgHandler() {
+conn.publish("foo", "You done?", new MsgHandler() {
 	public void execute() {
 		System.out.println("Message processed!");
 	}
 });
 
 // Timeouts for subscriptions
-Integer sid = session.subscribe("foo", new MsgHandler() {
+Integer sid = conn.subscribe("foo", new MsgHandler() {
 	int received = 0;
 	public void execute() {
 		received++;
 	}
 });
-session.timeout(sid, TIMEOUT_IN_SECS, new MsgHandler() {
+conn.timeout(sid, TIMEOUT_IN_SECS, new MsgHandler() {
 	public void execute() {
 		timeout_recv = true;
 	}
@@ -152,29 +152,29 @@ session.timeout(sid, TIMEOUT_IN_SECS, new MsgHandler() {
 // Timeout unless a certain number of messages have been received
 Properties opt = new Properties();
 opt.put("expected", new Integer(2));
-session.timeout(sid, 10, opt, new MsgHandler() {
+conn.timeout(sid, 10, opt, new MsgHandler() {
 	public void execute(Object o) {
 		timeout_recv = true;
 	}
 });
 
 // Auto-unsubscribe after MAX_WANTED messages received
-session.unsubscribe(sid, MAX_WANTED)
+conn.unsubscribe(sid, MAX_WANTED)
 
 // Multiple connections
-session1.subscribe("test", new MsgHandler() {
+conn1.subscribe("test", new MsgHandler() {
 	public void execute(String msg) {
     	System.out.println("received : " + msg);
     }
 });
 
 // Form second connection to send message on
-Session session2 = Session.connect(new Properties());
-session2.start(new MsgHandler() {
+Connection conn2 = Connection.connect(new Properties());
+conn2.start(new MsgHandler() {
 	public void execute(Object o) {
-		Session session = (Session)o;
+		Connection conn = (Connection)o;
 		try {
-			session.publish("test", "Hello World!");
+			conn.publish("test", "Hello World!");
 		} catch (IOException e) {
 			e.printStackTrace();
 		}

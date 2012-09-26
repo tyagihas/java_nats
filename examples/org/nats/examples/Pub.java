@@ -2,19 +2,21 @@ package org.nats.examples;
 
 import java.util.Properties;
 
-import org.nats.Session;
+import org.nats.Connection;
 
 public class Pub {
 
 	public static void main(String[] args) throws Exception {
-		Session session = Session.connect(new Properties());
-		session.start();
+		Connection conn = Connection.connect(new Properties());
+		conn.start();
 
 		System.out.println("Publishing...");		
-		session.publish("hello", "world");
-		session.flush();
+		conn.publish("hello", "world");
+		conn.flush();
 		
-		session.stop();
+		Thread.sleep(Long.MAX_VALUE);
+		
+		conn.stop();
 		System.exit(0);
 	}
 }

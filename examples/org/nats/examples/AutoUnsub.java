@@ -10,26 +10,26 @@ public class AutoUnsub {
 
 	public static void main(String[] args) throws Exception {
 	    BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(System.in));
-		Session session = Session.connect(new Properties());
-		session.start();
+		Connection conn = Connection.connect(new Properties());
+		conn.start();
 
 		System.out.println("Listening on : " + args[0] + ", auto unsubscribing after 5 messages, but will send 10");
 		Properties opt = new Properties();
 		opt.setProperty("max", "5");
-		session.subscribe(args[0], opt, new MsgHandler() {
+		conn.subscribe(args[0], opt, new MsgHandler() {
 			public void execute(String msg) {
 				System.out.println("Received update : " + msg);
 			}
 		});
 		
 		for(int i = 0; i < 10; i++)
-			session.publish(args[0], Integer.toString(i));
+			conn.publish(args[0], Integer.toString(i));
 		
 		System.out.println("\nPress enter to exit.");
 		bufferedReader.readLine();
 		
-		session.flush();
-		session.stop();
+		conn.flush();
+		conn.stop();
 		
 		System.exit(0);
 	}
