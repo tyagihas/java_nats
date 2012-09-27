@@ -19,14 +19,14 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class Connection {
 
-	public static final String version = "0.4.4";
+	private static final String version = "0.4.5";
 	
 	public static final int DEFAULT_PORT = 4222;
 	public static final String DEFAULT_URI = "nats://localhost:" + Integer.toString(DEFAULT_PORT);
 
 	// Parser state
-	public static final int AWAITING_CONTROL = 0;
-	public static final int AWAITING_MSG_PAYLOAD = 1;
+	private static final int AWAITING_CONTROL = 0;
+	private static final int AWAITING_MSG_PAYLOAD = 1;
 
 	// Reconnect Parameters, 2 sec wait, 10 tries
 	public static final int DEFAULT_RECONNECT_TIME_WAIT = 2*1000;
@@ -37,28 +37,28 @@ public final class Connection {
 	public static final int MAX_BUFFER_SIZE = 16 * 1024 * 1024; // 16 Mb
 	public static final long REALLOCATION_THRESHOLD = 5 * 1000; // 5 seconds
     
-	public static final String CR_LF = "\r\n";
-	public static final int CR_LF_LEN = CR_LF.length();
-	public static final String EMPTY = "";
-	public static final String SPC = " ";
+	private static final String CR_LF = "\r\n";
+	private static final int CR_LF_LEN = CR_LF.length();
+	private static final String EMPTY = "";
+	private static final String SPC = " ";
 
 	// Protocol
-	public static final byte[] PUB = "PUB".getBytes();
-	public static final byte[] SUB = "SUB".getBytes();
-	public static final byte[] UNSUB = "UNSUB".getBytes();
-	public static final byte[] CONNECT = "CONNECT".getBytes();
-	public static final byte[] MSG = "MSG".getBytes();
-	public static final byte[] PONG = "PONG".getBytes();
-	public static final byte[] PING = "PING".getBytes();
-	public static final byte[] INFO = "INFO".getBytes();
-	public static final byte[] ERR = "-ERR".getBytes();
-	public static final byte[] OK = "+OK".getBytes();
+	private static final byte[] PUB = "PUB".getBytes();
+	private static final byte[] SUB = "SUB".getBytes();
+	private static final byte[] UNSUB = "UNSUB".getBytes();
+	private static final byte[] CONNECT = "CONNECT".getBytes();
+	private static final byte[] MSG = "MSG".getBytes();
+	private static final byte[] PONG = "PONG".getBytes();
+	private static final byte[] PING = "PING".getBytes();
+	private static final byte[] INFO = "INFO".getBytes();
+	private static final byte[] ERR = "-ERR".getBytes();
+	private static final byte[] OK = "+OK".getBytes();
 
 	// Responses
-	public static final byte[] PING_REQUEST = ("PING" + CR_LF).getBytes();
-	public static final int PING_REQUEST_LEN = PING_REQUEST.length;
-	public static final byte[] PONG_RESPONSE = ("PONG" + CR_LF).getBytes();
-	public static final int PONG_RESPONSE_LEN = PONG_RESPONSE.length;
+	private static final byte[] PING_REQUEST = ("PING" + CR_LF).getBytes();
+	private static final int PING_REQUEST_LEN = PING_REQUEST.length;
+	private static final byte[] PONG_RESPONSE = ("PONG" + CR_LF).getBytes();
+	private static final int PONG_RESPONSE_LEN = PONG_RESPONSE.length;
 
 	private static int numConnections;
 	private static volatile int ssid;
@@ -478,7 +478,7 @@ public final class Connection {
 	 * Return version String.
 	 * @return version String
 	 */
-	public String inspect() {
+	public String getVersion() {
 		return "<nats java " + version + ">";
 	}
     
@@ -525,7 +525,6 @@ public final class Connection {
 				int reconnect_time_wait = ((Integer)opts.get("reconnect_time_wait")).intValue();
 			
 				for(int i = 0; i < max_reconnect_attempts; i++) {
-					System.out.println("Reconnecting : " + i);
 					channel.close();
 					connect();
 				
@@ -618,8 +617,8 @@ public final class Connection {
 								status = AWAITING_MSG_PAYLOAD;
 								parseMsg();
 								if (receiveBuffer.limit() < (payload_length + receiveBuffer.position() + 2)) {
-								    diff = receiveBuffer.limit() - receiveBuffer.position();
-								    // Don't clear() yet and keep it in buffer
+									diff = receiveBuffer.limit() - receiveBuffer.position();
+									// Don't clear() yet and keep it in buffer
 									receiveBuffer.compact();
 									receiveBuffer.position(diff);
 									reallocate = verifyTruncation();
