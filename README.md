@@ -37,7 +37,6 @@ import java.util.Properties;
 import org.nats.*;
 ...
 Connection conn = Connection.connect(new Properties());
-conn.start();
 
 // Simple Publisher
 conn.publish("foo", "Hello World!", null, null);
@@ -75,8 +74,7 @@ conn.subscribe("help", new MsgHandler() {
 	}
 });		
 
-conn.flush();
-conn.stop();
+conn.close();
 ```
 
 ## Wildcard Subcriptions
@@ -169,8 +167,7 @@ conn1.subscribe("test", new MsgHandler() {
 });
 
 // Form second connection to send message on
-Connection conn2 = Connection.connect(new Properties());
-conn2.start(new MsgHandler() {
+Connection conn2 = Connection.connect(new Properties(), new MsgHandler() {
 	public void execute(Object o) {
 		Connection conn = (Connection)o;
 		try {

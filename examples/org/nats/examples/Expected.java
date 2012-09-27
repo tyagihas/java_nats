@@ -9,9 +9,8 @@ import org.nats.*;
 public class Expected {
 
 	public static void main(String[] args) throws Exception {
-	    BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(System.in));
+		BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(System.in));
 		Connection conn = Connection.connect(new Properties());
-		conn.start();
 
 		System.out.println("Listening on : " + args[0]);
 		System.out.println("Will timeout in 10 seconds unless 2 messages are received");
@@ -33,9 +32,7 @@ public class Expected {
 		System.out.println("\nPress enter to exit.");
 		bufferedReader.readLine();
 		
-		conn.flush();
-		conn.stop();
-		
+		conn.close();
 		System.exit(0);
 	}
 }

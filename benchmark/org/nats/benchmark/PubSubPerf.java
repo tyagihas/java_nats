@@ -11,14 +11,13 @@ public class PubSubPerf {
 		final int loop = (args.length == 0 || args[0] == null) ? 100000 : Integer.parseInt(args[0]);
 		int size = (args.length == 0 || args[1] == null) ? 1 : Integer.parseInt(args[1]);
 		final int hash = 2500;
+		
 		StringBuffer buf = new StringBuffer();
 		for(int l = 0; l < size; l++) buf.append("a");
 		final String val = buf.toString();
 
 		final Connection conn1 = Connection.connect(new Properties());
-		conn1.start();
 		final Connection conn2 = Connection.connect(new Properties());
-		conn2.start();
 
 		System.out.println("Performing Publish/Subscribe performance test");
 		final long start = System.nanoTime();

@@ -10,9 +10,8 @@ import org.nats.*;
 public class MultiConnection {
 
 	public static void main(String[] args) throws Exception {
-	    BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(System.in));
+		BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(System.in));
 		Connection conn1 = Connection.connect(new Properties());
-		conn1.start();
 
 		conn1.subscribe("test", new MsgHandler() {
 			public void execute(String msg, String reply, String subject) {
@@ -20,8 +19,7 @@ public class MultiConnection {
 			}
 		});
 
-		Connection conn2 = Connection.connect(new Properties());
-		conn2.start(new MsgHandler() {
+		Connection conn2 = Connection.connect(new Properties(), new MsgHandler() {
 			public void execute(Object o) {
 				Connection conn = (Connection)o;
 				try {
@@ -35,10 +33,8 @@ public class MultiConnection {
 		System.out.println("\nPress enter to exit.");
 		bufferedReader.readLine();
 		
-		conn1.flush();
-		conn1.stop();
-		conn2.flush();
-		conn2.stop();
+		conn1.close();
+		conn2.close();
 		System.exit(0);
 	}
 }

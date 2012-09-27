@@ -19,7 +19,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class Connection {
 
-	public static final String version = "0.4.3";
+	public static final String version = "0.4.4";
 	
 	public static final int DEFAULT_PORT = 4222;
 	public static final String DEFAULT_URI = "nats://localhost:" + Integer.toString(DEFAULT_PORT);
@@ -94,6 +94,16 @@ public final class Connection {
 	 * @return newly created Connection object
 	 */
 	public static Connection connect(Properties popts) throws IOException, InterruptedException {
+		return Connection.connect(popts, null);
+	}
+	
+	/** 
+	 * Create and return a Connection with various attributes. 
+	 * @param popts Properties object containing connection attributes
+	 * @param handler MsgHandler to be invoked when connection is established
+	 * @return newly created Connection object
+	 */
+	public static Connection connect(Properties popts, MsgHandler handler) throws IOException, InterruptedException {
 		// Defaults
 		if (!popts.contains("verbose")) popts.put("verbose", new Boolean(false));
 		if (!popts.contains("pedantic")) popts.put("pedantic", new Boolean(false));
@@ -113,10 +123,10 @@ public final class Connection {
 		if (System.getenv("NATS_MAX_RECONNECT_ATTEMPTS") != null) popts.put("max_reconnect_attempts", Integer.parseInt(System.getenv("NATS_MAX_RECONNECT_ATTEMPTS")));
 		if (System.getenv("NATS_MAX_RECONNECT_TIME_WAIT") != null) popts.put("max_reconnect_time_wait", Integer.parseInt(System.getenv("NATS_MAX_RECONNECT_TIME_WAIT")));
 
-		return new Connection(popts);
+		return new Connection(popts, handler);
 	}
 	
-	private Connection(Properties popts) throws IOException, InterruptedException {
+	private Connection(Properties popts, MsgHandler handler) throws IOException, InterruptedException {
 		self = this;
 		processor = new MsgProcessor();
 		sendBuffer = ByteBuffer.allocateDirect(INIT_BUFFER_SIZE);
@@ -132,12 +142,18 @@ public final class Connection {
 		timer = new Timer("NATS_Timer-" + numConnections);
 
 		connect();
+		
+		if (handler != null)
+			connectHandler = handler;
+		processor.start();    	
+		sendConnectCommand();
+		numConnections++;
 	}
 
 	private boolean connect() throws IOException {
 		try {
 			channel = SocketChannel.open(addr);
-			while(!channel.isConnected()){}
+			while(!channel.isConnected()){}			
 		} catch(Exception ie) {
 			ie.printStackTrace();
 			return false;
@@ -165,29 +181,6 @@ public final class Connection {
 				+ hexRand(0x0100000, rand);
 	}
 
-	/**
-	 * Establish a connection to the server and start a background thread for processing incoming and outgoing messages
-	 * @throws IOException
-	 * @throws InterruptedException
-	 */
-	public void start() throws IOException, InterruptedException {
-		start(null);
-	}
-
-	/**
-	 * Establish a connection to the server and start a background thread for processing incoming and outgoing messages
-	 * @param handler EventHanlder invoked when connection is established.
-	 * @throws IOException
-	 * @throws InterruptedException
-	 */
-	public void start(MsgHandler handler) throws IOException, InterruptedException {
-		if (handler != null)
-			connectHandler = handler;
-		processor.start();    	
-		sendConnectCommand();
-		numConnections++;
-	}
-	
 	private void sendConnectCommand() throws IOException {
 		StringBuffer sb = new StringBuffer("CONNECT {\"verbose\":");
 		sb.append(((Boolean)opts.get("verbose")).toString());
@@ -199,12 +192,23 @@ public final class Connection {
 		sendCommand(sb.toString());
 	}
 
+	
 	/**
-	 * Close the channel and stopping the background thread.
+	 * Close the channel with flushing buffer and stop the background thread.
 	 * @throws IOException
 	 */
-	public void stop() throws IOException {
-		flushPending();
+	public void close() throws IOException {
+		close(true);
+	}
+	
+	/**
+	 * Close the channel and stop the background thread.
+	 * @param flush flushing messages in buffer before closing
+	 * @throws IOException
+	 */
+	public void close(boolean flush) throws IOException {
+		if (flush)
+			flush();
 		channel.close();
 		numConnections--;
 		processor.interrupt();

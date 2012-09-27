@@ -15,7 +15,6 @@ public class PubPerf {
 		
 		Properties prop = new Properties();
 		Connection conn = Connection.connect(prop);
-		conn.start();
 
 		System.out.println("Performing Publish performance test");
 		final long start = System.nanoTime();
@@ -33,7 +32,7 @@ public class PubPerf {
 			}
 		});
 		
-		conn.stop();		
+		conn.close();		
 		System.exit(0);
 	}	
 }

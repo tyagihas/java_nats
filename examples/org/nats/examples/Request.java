@@ -9,7 +9,6 @@ public class Request {
 
 	public static void main(String[] args) throws Exception {
 		final Connection conn = Connection.connect(new Properties());
-		conn.start();
 
 		System.out.println("Subscribing...");		
 		conn.subscribe("help", new MsgHandler() {

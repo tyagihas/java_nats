@@ -9,10 +9,8 @@ import org.nats.*;
 public class SubUnsub {
 
 	public static void main(String[] args) throws Exception {
-		
-	    BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(System.in));
+		BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(System.in));
 		Connection conn = Connection.connect(new Properties());
-		conn.start();
 
 		System.out.println("Subscribing...");
 		Integer sid = conn.subscribe("hello", new MsgHandler() {
@@ -25,7 +23,7 @@ public class SubUnsub {
 		bufferedReader.readLine();
 		conn.unsubscribe(sid);
 		
-		conn.stop();
+		conn.close();
 		System.exit(0);
 	}
 }
