@@ -19,7 +19,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class Connection {
 
-	private static final String version = "0.4.5";
+	private static final String version = "0.4.6";
 	
 	public static final int DEFAULT_PORT = 4222;
 	public static final String DEFAULT_URI = "nats://localhost:" + Integer.toString(DEFAULT_PORT);
@@ -383,9 +383,7 @@ public final class Connection {
 						// Flushing very first message
 						timer.schedule(new TimerTask() {
 							public void run() {
-								try {
-									flushPending();
-								} catch (IOException e) {e.printStackTrace();}								
+								flushPending();
 							}
 						}, 1);
 						return;
@@ -405,15 +403,19 @@ public final class Connection {
 		}		
 	}
 	
-	private void flushPending() throws IOException {
+	private void flushPending() {
 		synchronized(sendBuffer) {
 			if (sendBuffer.position() > 0) {
-				sendBuffer.flip();
-				for(;;) {
-					if (sendBuffer.position() >= sendBuffer.limit()) break;
-					channel.write(sendBuffer);
-				}		
-				sendBuffer.clear();
+				try {
+					sendBuffer.flip();
+					for(;;) {
+						if (sendBuffer.position() >= sendBuffer.limit()) break;
+						channel.write(sendBuffer);
+					}		
+					sendBuffer.clear();
+				} catch (IOException ie) {
+					reconnect();
+				}
 			}
 		}
 	}
@@ -517,17 +519,18 @@ public final class Connection {
 		timer.schedule(task, tout * 1000);
 		sub.task = task;
 	}
+	
+	private void reconnect() {
+		boolean doReconnect = ((Boolean)opts.get("reconnect")).booleanValue();
 
-	private class ReconnectTask extends TimerTask {
-		public void run() {
-			try {
-				int max_reconnect_attempts = ((Integer)opts.get("max_reconnect_attempts")).intValue();
-				int reconnect_time_wait = ((Integer)opts.get("reconnect_time_wait")).intValue();
-			
-				for(int i = 0; i < max_reconnect_attempts; i++) {
+		if (doReconnect) {
+			int max_reconnect_attempts = ((Integer)opts.get("max_reconnect_attempts")).intValue();
+			int reconnect_time_wait = ((Integer)opts.get("reconnect_time_wait")).intValue();
+			for(int i = 0; i < max_reconnect_attempts; i++) {
+				try {
 					channel.close();
 					connect();
-				
+
 					if (isConnected()) {
 						sendConnectCommand();
 						sendSubscirptions();
@@ -535,9 +538,18 @@ public final class Connection {
 						break;
 					}	
 					Thread.sleep(reconnect_time_wait);
+				} catch(IOException ie) {
+					continue;
+				} catch (InterruptedException e) {
+					e.printStackTrace();
 				}
 			}
-			catch(Exception e) {e.printStackTrace();}
+		}
+	}
+
+	private class ReconnectTask extends TimerTask {
+		public void run() {
+			reconnect();
 		}
 	}
 	
@@ -594,8 +606,11 @@ public final class Connection {
 					processMessage();
 				} catch(AsynchronousCloseException ace) {
 					continue;
-				} catch (Exception e) {
-					break;
+				} catch (IOException e) {
+					reconnect();
+					if (!isConnected())
+						// terminating background thread if reconnect fails
+						break;
 				}
 			}
 		}    	
