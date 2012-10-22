@@ -19,7 +19,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class Connection {
 
-	private static final String version = "0.4.6";
+	private static final String version = "0.4.7";
 	
 	public static final int DEFAULT_PORT = 4222;
 	public static final String DEFAULT_URI = "nats://localhost:" + Integer.toString(DEFAULT_PORT);
@@ -82,7 +82,9 @@ public final class Connection {
 	private int bytes_sent;
 	private int msgs_received;
 	private int bytes_received;
-
+	
+	private volatile boolean reconnecting;
+	
 	static {
 		ssid = 1;
 		numConnections = 0;
@@ -140,6 +142,7 @@ public final class Connection {
 		String[] uri = ((String)opts.get("uri")).split(":");
 		addr = new InetSocketAddress(uri[1].substring(2, uri[1].length()), Integer.parseInt(uri[2]));
 		timer = new Timer("NATS_Timer-" + numConnections);
+		reconnecting = false;
 
 		connect();
 		
@@ -523,6 +526,7 @@ public final class Connection {
 	private void reconnect() {
 		boolean doReconnect = ((Boolean)opts.get("reconnect")).booleanValue();
 
+		processor.interrupt();
 		if (doReconnect) {
 			int max_reconnect_attempts = ((Integer)opts.get("max_reconnect_attempts")).intValue();
 			int reconnect_time_wait = ((Integer)opts.get("reconnect_time_wait")).intValue();
@@ -534,7 +538,8 @@ public final class Connection {
 					if (isConnected()) {
 						sendConnectCommand();
 						sendSubscirptions();
-						flushPending();				
+						flushPending();
+						reconnecting = false;
 						break;
 					}	
 					Thread.sleep(reconnect_time_wait);
@@ -545,14 +550,16 @@ public final class Connection {
 				}
 			}
 		}
+		processor.run();
 	}
-
+	
 	private class ReconnectTask extends TimerTask {
 		public void run() {
+			reconnecting = true;
 			reconnect();
 		}
 	}
-	
+
 	// Dummy event handler
 	private MsgHandler emptyHandler = new MsgHandler() {};
     
@@ -607,10 +614,10 @@ public final class Connection {
 				} catch(AsynchronousCloseException ace) {
 					continue;
 				} catch (IOException e) {
-					reconnect();
-					if (!isConnected())
-						// terminating background thread if reconnect fails
-						break;
+					// skipping if reconnect already starts due to -ERR code
+					if (!reconnecting) reconnect();
+					// terminating background thread if reconnect fails
+					if (!isConnected()) break;
 				}
 			}
 		}    	
@@ -647,14 +654,12 @@ public final class Connection {
 									handler = pongs.poll();
 								}
 								processEvent(null, handler);
-								if (handler.caller != null)
-									handler.caller.interrupt();
+								if (handler.caller != null) handler.caller.interrupt();
 							}
 							else if (comp(buf, PING, 4)) sendCommand(PONG_RESPONSE, PONG_RESPONSE_LEN, true);
 							else if (comp(buf, ERR, 4)) timer.schedule(new ReconnectTask(), 0);
 							else if (comp(buf, OK, 3)) {/* do nothing for now */}
-							else if (comp(buf, INFO, 4)) 
-								if (connectHandler != null) connectHandler.execute((Object)self);
+							else if (comp(buf, INFO, 4)) if (connectHandler != null) connectHandler.execute((Object)self);
 						}
 						break;
 					case AWAITING_MSG_PAYLOAD :

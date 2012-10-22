@@ -25,7 +25,6 @@ public class PubSubPerf {
 			int received = 0;
 			public void execute(Object o) {
 				received++;
-				// System.out.println("Execute : " + (String)o);
 				if (received == loop) {
 					double elapsed = System.nanoTime() - start;
 					System.out.println();
@@ -43,8 +42,6 @@ public class PubSubPerf {
 				try {
 					for(int i = 1; i <= loop; i++) {
 						conn2.publish("test", val);
-						// conn2.publish("test", "aaaa\r\nbbbb\r\ncccc\r\ndddd\r\n");
-						// conn2.publish("test", new Integer(i).toString());
 						if (i % hash == 0)
 							System.out.print("+");
 					}
