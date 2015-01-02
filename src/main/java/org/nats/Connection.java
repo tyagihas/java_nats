@@ -19,7 +19,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class Connection {
 
-	private static final String version = "0.4.7";
+	private static final String version = "0.5";
 	
 	public static final int DEFAULT_PORT = 4222;
 	public static final String DEFAULT_URI = "nats://localhost:" + Integer.toString(DEFAULT_PORT);
@@ -36,7 +36,7 @@ public final class Connection {
 	public static final int INIT_BUFFER_SIZE = 1 * 1024 * 1024; // 1 Mb
 	public static final int MAX_BUFFER_SIZE = 16 * 1024 * 1024; // 16 Mb
 	public static final long REALLOCATION_THRESHOLD = 5 * 1000; // 5 seconds
-    
+	
 	private static final String CR_LF = "\r\n";
 	private static final int CR_LF_LEN = CR_LF.length();
 	private static final String EMPTY = "";
@@ -62,14 +62,24 @@ public final class Connection {
 
 	private static int numConnections;
 	private static volatile int ssid;
+
+	private class Server {
+		public String host;
+		public int port;
+		public boolean connected = false;
+		public int reconnect_attempts = 0;
+	}
+	private Server[] servers;
+	private int current;
+	
 	private Connection self;
 	private MsgHandler connectHandler;
 	private Connection.MsgProcessor processor;
 
 	private Properties opts;
-	private InetSocketAddress addr;
 	private SocketChannel channel;
 	private ByteBuffer sendBuffer;
+	private int lastPos;
 	private ByteBuffer receiveBuffer;
 	
 	private int status;
@@ -88,7 +98,7 @@ public final class Connection {
 	static {
 		ssid = 1;
 		numConnections = 0;
-	}
+	}	
 
 	/** 
 	 * Create and return a Connection with various attributes. 
@@ -107,12 +117,13 @@ public final class Connection {
 	 */
 	public static Connection connect(Properties popts, MsgHandler handler) throws IOException, InterruptedException {
 		// Defaults
-		if (!popts.contains("verbose")) popts.put("verbose", new Boolean(false));
-		if (!popts.contains("pedantic")) popts.put("pedantic", new Boolean(false));
-		if (!popts.contains("reconnect")) popts.put("reconnect", new Boolean(false));
-		if (!popts.contains("ssl")) popts.put("ssl", new Boolean(false));
-		if (!popts.contains("max_reconnect_attempts")) popts.put("max_reconnect_attempts", new Integer(DEFAULT_MAX_RECONNECT_ATTEMPTS));
-		if (!popts.contains("reconnect_time_wait")) popts.put("reconnect_time_wait", new Integer(DEFAULT_RECONNECT_TIME_WAIT));
+		if (!popts.containsKey("verbose")) popts.put("verbose", Boolean.FALSE);
+		if (!popts.containsKey("pedantic")) popts.put("pedantic", Boolean.FALSE);
+		if (!popts.containsKey("reconnect")) popts.put("reconnect", Boolean.TRUE);
+		if (!popts.containsKey("ssl")) popts.put("ssl", new Boolean(false));
+		if (!popts.containsKey("max_reconnect_attempts")) popts.put("max_reconnect_attempts", new Integer(DEFAULT_MAX_RECONNECT_ATTEMPTS));
+		if (!popts.containsKey("reconnect_time_wait")) popts.put("reconnect_time_wait", new Integer(DEFAULT_RECONNECT_TIME_WAIT));
+		if (!popts.containsKey("dont_randomize_servers")) popts.put("dont_randomize_servers", Boolean.FALSE);
 
 		// Overriding with ENV
 		if (System.getenv("NATS_URI") != null) popts.put("uri", System.getenv("NATS_URI")); else if (!popts.containsKey("uri")) popts.put("uri", DEFAULT_URI);
@@ -127,11 +138,12 @@ public final class Connection {
 
 		return new Connection(popts, handler);
 	}
-	
+
 	private Connection(Properties popts, MsgHandler handler) throws IOException, InterruptedException {
 		self = this;
 		processor = new MsgProcessor();
 		sendBuffer = ByteBuffer.allocateDirect(INIT_BUFFER_SIZE);
+		lastPos = 0;
 		receiveBuffer = ByteBuffer.allocateDirect(INIT_BUFFER_SIZE);
 		status = AWAITING_CONTROL;
 		msgs_sent = bytes_sent = 0;
@@ -139,10 +151,10 @@ public final class Connection {
 		pongs = new LinkedList<MsgHandler>();
 
 		opts = popts;
-		String[] uri = ((String)opts.get("uri")).split(":");
-		addr = new InetSocketAddress(uri[1].substring(2, uri[1].length()), Integer.parseInt(uri[2]));
+		configServers();
 		timer = new Timer("NATS_Timer-" + numConnections);
 		reconnecting = false;
+		current = 0;
 
 		connect();
 		
@@ -152,11 +164,38 @@ public final class Connection {
 		sendConnectCommand();
 		numConnections++;
 	}
+	
+	private void configServers() {
+		String[] serverStrings = null;
+		if (opts.containsKey("uris")) 
+			serverStrings = ((String)opts.get("uris")).split(",");
+		else if (opts.containsKey("servers")) 
+			serverStrings = ((String)opts.get("servers")).split(",");
+		else if (opts.containsKey("uri")) 
+			serverStrings = ((String)opts.get("uri")).split(",");
 
+		servers = new Server[serverStrings.length];
+		Random rand = (((Boolean)opts.get("dont_randomize_servers")) == Boolean.TRUE ? null : new Random());
+		String[] uri;
+		for(int i = 0; i < serverStrings.length; i++) {
+			int idx = i;
+			for(;rand != null;) {
+				idx = rand.nextInt(servers.length);
+				if (servers[idx] == null) break;
+			}
+			uri = serverStrings[i].split(":");
+			servers[idx] = new Server();
+			servers[idx].host = uri[1].substring(2, uri[1].length());
+			servers[idx].port = Integer.parseInt(uri[2]);
+		}
+	}
+	
 	private boolean connect() throws IOException {
 		try {
+			InetSocketAddress addr = new InetSocketAddress(servers[current].host, servers[current].port);
 			channel = SocketChannel.open(addr);
 			while(!channel.isConnected()){}			
+			servers[current].connected = true;
 		} catch(Exception ie) {
 			ie.printStackTrace();
 			return false;
@@ -188,8 +227,8 @@ public final class Connection {
 		StringBuffer sb = new StringBuffer("CONNECT {\"verbose\":");
 		sb.append(((Boolean)opts.get("verbose")).toString());
 		sb.append(",\"pedantic\":").append((Boolean)opts.get("pedantic"));
-		if (opts.get("user") != null) sb.append(",\"user\":").append((String)opts.getProperty("user"));
-		if (opts.get("pass") != null) sb.append(",\"pass\":").append((String)opts.getProperty("pass"));
+		if (opts.get("user") != null) sb.append(",\"user\":\"").append((String)opts.getProperty("user")).append("\"");
+		if (opts.get("pass") != null) sb.append(",\"pass\":\"").append((String)opts.getProperty("pass")).append("\"");
 		sb.append("}").append(CR_LF);
 		
 		sendCommand(sb.toString());
@@ -331,7 +370,7 @@ public final class Connection {
 		if (sub.max != -1) this.unsubscribe(sid, sub.max);
 	}
 
-	private void sendSubscirptions() throws IOException {
+	private void sendSubscriptions() throws IOException {
 		Entry<Integer, Subscription> entry = null;
     	
 		for(Iterator<Entry<Integer, Connection.Subscription>> iter = subs.entrySet().iterator(); iter.hasNext();) {
@@ -408,7 +447,7 @@ public final class Connection {
 	
 	private void flushPending() {
 		synchronized(sendBuffer) {
-			if (sendBuffer.position() > 0) {
+			if ((lastPos = sendBuffer.position()) > 0) {
 				try {
 					sendBuffer.flip();
 					for(;;) {
@@ -530,25 +569,43 @@ public final class Connection {
 		if (doReconnect) {
 			int max_reconnect_attempts = ((Integer)opts.get("max_reconnect_attempts")).intValue();
 			int reconnect_time_wait = ((Integer)opts.get("reconnect_time_wait")).intValue();
-			for(int i = 0; i < max_reconnect_attempts; i++) {
-				try {
-					channel.close();
-					connect();
+			// Salvaging unsent messages in sendBuffer
+			byte[] unsent = null;
+			if (lastPos > 0) {
+				unsent = new byte[lastPos]; 
+				sendBuffer.get(unsent, 0, lastPos);
+				sendBuffer.clear();
+				lastPos = 0;
+			}
+			
+			outer:
+			for(; current < servers.length; current++) {
+				for(; servers[current].reconnect_attempts < max_reconnect_attempts; servers[current].reconnect_attempts++) {
+					try {
+						channel.close();
+						connect();
 
-					if (isConnected()) {
-						sendConnectCommand();
-						sendSubscirptions();
-						flushPending();
-						reconnecting = false;
-						break;
-					}	
-					Thread.sleep(reconnect_time_wait);
-				} catch(IOException ie) {
-					continue;
-				} catch (InterruptedException e) {
-					e.printStackTrace();
+						if (isConnected()) {
+							sendConnectCommand();
+							sendSubscriptions();
+							if (unsent != null)
+								sendCommand(unsent, unsent.length, false);
+							flushPending();
+							reconnecting = false;
+							servers[current].reconnect_attempts = 0;
+							break outer;
+						}	
+						Thread.sleep(reconnect_time_wait);
+					} catch(IOException ie) {
+						continue;
+					} catch (InterruptedException e) {
+						e.printStackTrace();
+					}
 				}
 			}
+			
+			// Failing reconnection to all servers
+			if (reconnecting) return;
 		}
 		processor.run();
 	}

@@ -1,8 +1,6 @@
 # Java_Nats
 
-A Java client for the [NATS messaging system](https://github.com/derekcollison/nats).
-
-[![Build Status](https://secure.travis-ci.org/derekcollison/node_nats.png)](http://travis-ci.org/derekcollison/node_nats)
+Java client library for the [NATS messaging system](http://nats.io).
 
 ## Supported Platforms
 
@@ -15,19 +13,29 @@ java_nats currently supports following Java Platforms :
 
 ## Getting Started
 
+Compiling from source files
 ```javascript
 Download source files and "cd" to java_nats root directory :
 % cd <java_nats>
 
-Compile:
-% javac -d ./bin ./lib/org/nats/*.java
+Compile :
+% javac -d ./bin ./src/main/java/org/nats/*.java
 % export CLASSPATH=./bin
-% javac -d ./bin ./benchmark/org/nats/benchmark/*.java
-% javac -d ./bin ./examples/org/nats/examples/*.java
+% javac -d ./bin ./src/test/java/org/nats/benchmark/*.java
+% javac -d ./bin ./src/test/java/org/nats/examples/*.java
 
-Run:
+Run :
 cd ./bin
 % ./PubPerf.sh 100000 16
+```
+
+Or adding dependency to Maven pom.xml
+```javascript
+<dependency>
+	<groupId>com.github.tyagihas</groupId>
+	<artifactId>java_nats</artifactId>
+	<version>0.5</version>
+</dependency>
 ```
 
 ## Basic Usage
@@ -124,6 +132,19 @@ conn.subscribe(args[0], opt, new MsgHandler() {
 });
 ```
 
+## Clustered Usage
+
+```javascript
+Properties opts = new Properties();
+opts.put("servers", "nats://server1:4242,nats://server2:4243");
+opts.put("user", "user1");
+opts.put("pass", "password1");
+
+Connection conn = Connection.connect(opts);
+conn.publish("hello", "world");
+
+```
+
 ## Advanced Usage
 
 ```javascript
@@ -185,7 +206,7 @@ See examples and benchmarks for more information..
 
 (The MIT License)
 
-Copyright (c) 2011-2012 Teppei Yagihashi
+Copyright (c) 2014-2015 Teppei Yagihashi
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to
