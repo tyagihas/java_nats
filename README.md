@@ -14,7 +14,8 @@ java_nats currently supports following Java Platforms :
 ## Getting Started
 
 Compiling from source files
-```javascript
+
+```bash
 Download source files and "cd" to java_nats root directory :
 % cd <java_nats>
 
@@ -30,7 +31,8 @@ cd ./bin
 ```
 
 Or adding dependency to Maven pom.xml
-```javascript
+
+```xml
 <dependency>
 	<groupId>com.github.tyagihas</groupId>
 	<artifactId>java_nats</artifactId>
@@ -40,7 +42,7 @@ Or adding dependency to Maven pom.xml
 
 ## Basic Usage
 
-```javascript
+```java
 import java.util.Properties;
 import org.nats.*;
 ...
@@ -87,7 +89,7 @@ conn.close();
 
 ## Wildcard Subcriptions
 
-```javascript
+```java
 // "*" matches any token, at any level of the subject.
 conn.subscribe("foo.*.baz", new MsgHandler() {
 	public void execute(String msg, String reply, String subject) {
@@ -118,7 +120,7 @@ conn.subscribe("foo.>", new MsgHandler() {
 
 ## Queues Groups
 
-```javascript
+```java
 // All subscriptions with the same queue name will form a queue group
 // Each message will be delivered to only one subscriber per queue group, queuing semantics
 // You can have as many queue groups as you wish
@@ -134,7 +136,7 @@ conn.subscribe(args[0], opt, new MsgHandler() {
 
 ## Clustered Usage
 
-```javascript
+```java
 Properties opts = new Properties();
 opts.put("servers", "nats://server1:4242,nats://server2:4243");
 opts.put("user", "user1");
@@ -147,7 +149,7 @@ conn.publish("hello", "world");
 
 ## Advanced Usage
 
-```javascript
+```java
 // Publish with closure, callback fires when server has processed the message
 conn.publish("foo", "You done?", new MsgHandler() {
 	public void execute() {
