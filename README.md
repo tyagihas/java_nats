@@ -36,7 +36,7 @@ Or adding dependency to Maven pom.xml
 <dependency>
 	<groupId>com.github.tyagihas</groupId>
 	<artifactId>java_nats</artifactId>
-	<version>0.5</version>
+	<version>0.5.1</version>
 </dependency>
 ```
 
@@ -138,9 +138,7 @@ conn.subscribe(args[0], opt, new MsgHandler() {
 
 ```java
 Properties opts = new Properties();
-opts.put("servers", "nats://server1:4242,nats://server2:4243");
-opts.put("user", "user1");
-opts.put("pass", "password1");
+opts.put("servers", "nats://user1:pass1@server1,nats://user1:pass1@server2:4243");
 
 Connection conn = Connection.connect(opts);
 conn.publish("hello", "world");
@@ -208,7 +206,7 @@ See examples and benchmarks for more information..
 
 (The MIT License)
 
-Copyright (c) 2014-2015 Teppei Yagihashi
+Copyright (c) 2012-2015 Teppei Yagihashi
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to

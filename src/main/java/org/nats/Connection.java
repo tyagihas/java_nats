@@ -17,9 +17,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * @author Teppei Yagihashi
  *
  */
-public final class Connection {
+public class Connection {
 
-	private static final String version = "0.5";
+	private static final String version = "0.5.1";
 	
 	public static final int DEFAULT_PORT = 4222;
 	public static final String DEFAULT_URI = "nats://localhost:" + Integer.toString(DEFAULT_PORT);
@@ -39,7 +39,7 @@ public final class Connection {
 	
 	private static final String CR_LF = "\r\n";
 	private static final int CR_LF_LEN = CR_LF.length();
-	private static final String EMPTY = "";
+	protected static final String EMPTY = "";
 	private static final String SPC = " ";
 
 	// Protocol
@@ -66,6 +66,8 @@ public final class Connection {
 	private class Server {
 		public String host;
 		public int port;
+		public String user;
+		public String pass;
 		public boolean connected = false;
 		public int reconnect_attempts = 0;
 	}
@@ -116,6 +118,11 @@ public final class Connection {
 	 * @return newly created Connection object
 	 */
 	public static Connection connect(Properties popts, MsgHandler handler) throws IOException, InterruptedException {
+		init(popts);
+		return new Connection(popts, handler);
+	}
+	
+	protected static void init(Properties popts) {
 		// Defaults
 		if (!popts.containsKey("verbose")) popts.put("verbose", Boolean.FALSE);
 		if (!popts.containsKey("pedantic")) popts.put("pedantic", Boolean.FALSE);
@@ -134,12 +141,10 @@ public final class Connection {
 		if (System.getenv("NATS_FAST_PRODUCER") != null) popts.put("fast_producer", new Boolean(System.getenv("NATS_FAST_PRODUCER")));
 		if (System.getenv("NATS_SSL") != null) popts.put("ssl", new Boolean(System.getenv("NATS_SSL")));
 		if (System.getenv("NATS_MAX_RECONNECT_ATTEMPTS") != null) popts.put("max_reconnect_attempts", Integer.parseInt(System.getenv("NATS_MAX_RECONNECT_ATTEMPTS")));
-		if (System.getenv("NATS_MAX_RECONNECT_TIME_WAIT") != null) popts.put("max_reconnect_time_wait", Integer.parseInt(System.getenv("NATS_MAX_RECONNECT_TIME_WAIT")));
-
-		return new Connection(popts, handler);
+		if (System.getenv("NATS_MAX_RECONNECT_TIME_WAIT") != null) popts.put("max_reconnect_time_wait", Integer.parseInt(System.getenv("NATS_MAX_RECONNECT_TIME_WAIT")));		
 	}
 
-	private Connection(Properties popts, MsgHandler handler) throws IOException, InterruptedException {
+	protected Connection(Properties popts, MsgHandler handler) throws IOException, InterruptedException {
 		self = this;
 		processor = new MsgProcessor();
 		sendBuffer = ByteBuffer.allocateDirect(INIT_BUFFER_SIZE);
@@ -171,7 +176,7 @@ public final class Connection {
 			serverStrings = ((String)opts.get("uris")).split(",");
 		else if (opts.containsKey("servers")) 
 			serverStrings = ((String)opts.get("servers")).split(",");
-		else if (opts.containsKey("uri")) 
+		else if (opts.containsKey("uri"))
 			serverStrings = ((String)opts.get("uri")).split(",");
 
 		servers = new Server[serverStrings.length];
@@ -185,8 +190,18 @@ public final class Connection {
 			}
 			uri = serverStrings[i].split(":");
 			servers[idx] = new Server();
-			servers[idx].host = uri[1].substring(2, uri[1].length());
-			servers[idx].port = Integer.parseInt(uri[2]);
+			if (serverStrings[i].contains("@")) {
+				servers[idx].user = uri[1].substring(2, uri[1].length());
+				servers[idx].pass = uri[2].split("@")[0];				
+				servers[idx].host = uri[2].split("@")[1];
+				servers[idx].port = Integer.parseInt(uri[3]);
+			}
+			else {
+				servers[idx].user = null;
+				servers[idx].pass = null;
+				servers[idx].host = uri[1].substring(2, uri[1].length());
+				servers[idx].port = Integer.parseInt(uri[2]);
+			}
 		}
 	}
 	
@@ -224,11 +239,22 @@ public final class Connection {
 	}
 
 	private void sendConnectCommand() throws IOException {
+		String user = null;
+		String pass = null;
 		StringBuffer sb = new StringBuffer("CONNECT {\"verbose\":");
 		sb.append(((Boolean)opts.get("verbose")).toString());
 		sb.append(",\"pedantic\":").append((Boolean)opts.get("pedantic"));
-		if (opts.get("user") != null) sb.append(",\"user\":\"").append((String)opts.getProperty("user")).append("\"");
-		if (opts.get("pass") != null) sb.append(",\"pass\":\"").append((String)opts.getProperty("pass")).append("\"");
+		if (opts.get("user") != null) {
+			user = (String)opts.getProperty("user");
+			pass = (String)opts.getProperty("pass");
+		}
+		if (servers[current].user != null) {
+			user = servers[current].user;
+			pass = servers[current].pass;			
+		}
+
+		if (user != null) sb.append(",\"user\":\"").append(user).append("\"");
+		if (pass != null) sb.append(",\"pass\":\"").append(pass).append("\"");
 		sb.append("}").append(CR_LF);
 		
 		sendCommand(sb.toString());
@@ -567,45 +593,47 @@ public final class Connection {
 
 		processor.interrupt();
 		if (doReconnect) {
-			int max_reconnect_attempts = ((Integer)opts.get("max_reconnect_attempts")).intValue();
-			int reconnect_time_wait = ((Integer)opts.get("reconnect_time_wait")).intValue();
-			// Salvaging unsent messages in sendBuffer
-			byte[] unsent = null;
-			if (lastPos > 0) {
-				unsent = new byte[lastPos]; 
-				sendBuffer.get(unsent, 0, lastPos);
-				sendBuffer.clear();
-				lastPos = 0;
-			}
-			
-			outer:
-			for(; current < servers.length; current++) {
-				for(; servers[current].reconnect_attempts < max_reconnect_attempts; servers[current].reconnect_attempts++) {
-					try {
-						channel.close();
-						connect();
-
-						if (isConnected()) {
-							sendConnectCommand();
-							sendSubscriptions();
-							if (unsent != null)
-								sendCommand(unsent, unsent.length, false);
-							flushPending();
-							reconnecting = false;
-							servers[current].reconnect_attempts = 0;
-							break outer;
-						}	
-						Thread.sleep(reconnect_time_wait);
-					} catch(IOException ie) {
-						continue;
-					} catch (InterruptedException e) {
-						e.printStackTrace();
-					}
+			synchronized(sendBuffer) {
+				int max_reconnect_attempts = ((Integer)opts.get("max_reconnect_attempts")).intValue();
+				int reconnect_time_wait = ((Integer)opts.get("reconnect_time_wait")).intValue();
+				// Salvaging unsent messages in sendBuffer
+				byte[] unsent = null;
+				if (lastPos > 0) {
+					unsent = new byte[lastPos]; 
+					sendBuffer.get(unsent, 0, lastPos);
+					sendBuffer.clear();
+					lastPos = 0;
 				}
+
+				outer:
+					for(; current < servers.length; current++) {
+						for(; servers[current].reconnect_attempts < max_reconnect_attempts; servers[current].reconnect_attempts++) {
+							try {
+								channel.close();
+								connect();
+
+								if (isConnected()) {
+									sendConnectCommand();
+									sendSubscriptions();
+									if (unsent != null)
+										sendCommand(unsent, unsent.length, false);
+									flushPending();
+									reconnecting = false;
+									servers[current].reconnect_attempts = 0;
+									break outer;
+								}	
+								Thread.sleep(reconnect_time_wait);
+							} catch(IOException ie) {
+								continue;
+							} catch (InterruptedException e) {
+								e.printStackTrace();
+							}
+						}
+					}
+
+				// Failing reconnection to all servers
+				if (reconnecting) return;
 			}
-			
-			// Failing reconnection to all servers
-			if (reconnecting) return;
 		}
 		processor.run();
 	}

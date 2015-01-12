@@ -9,9 +9,7 @@ public class ClusteredPub {
 	public static void main(String[] args) throws Exception {
 		Properties opts = new Properties();
 		// opts.put("dont_randomize_servers", Boolean.TRUE);
-		opts.put("servers", "nats://server1:4242,nats://server2:4243");
-		opts.put("user", "user1");
-		opts.put("pass", "pass1");
+		opts.put("servers", "nats://user1:pass1@server1,nats://user1:pass1@server2:4243");
 		Connection conn = Connection.connect(opts);
 
 		System.out.println("Publishing...");		
