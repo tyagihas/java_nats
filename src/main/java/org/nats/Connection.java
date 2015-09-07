@@ -8,6 +8,10 @@ import java.nio.channels.*;
 import java.util.*;
 import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Connection represents a bidirectional channel to NATS server. Message handler may be attached to each operation
@@ -19,7 +23,9 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class Connection {
 
-	private static final String version = "0.5.1";
+	//better be configured to be asynchronous
+  private final static Logger logger = LoggerFactory.getLogger(Connection.class);
+	private static final String version = "0.5.2";
 	
 	public static final int DEFAULT_PORT = 4222;
 	public static final String DEFAULT_URI = "nats://localhost:" + Integer.toString(DEFAULT_PORT);
@@ -31,6 +37,7 @@ public class Connection {
 	// Reconnect Parameters, 2 sec wait, 10 tries
 	public static final int DEFAULT_RECONNECT_TIME_WAIT = 2*1000;
 	public static final int DEFAULT_MAX_RECONNECT_ATTEMPTS = 10;
+	public static final long DEFAULT_PING_INTERVAL = 3*1000;
 	
 	public static final int MAX_PENDING_SIZE = 32768;
 	public static final int INIT_BUFFER_SIZE = 1 * 1024 * 1024; // 1 Mb
@@ -60,23 +67,15 @@ public class Connection {
 	private static final byte[] PONG_RESPONSE = ("PONG" + CR_LF).getBytes();
 	private static final int PONG_RESPONSE_LEN = PONG_RESPONSE.length;
 
+
+
 	private static int numConnections;
 	private static volatile int ssid;
 
-	private class Server {
-		public String host;
-		public int port;
-		public String user;
-		public String pass;
-		public boolean connected = false;
-		public int reconnect_attempts = 0;
-	}
-	private Server[] servers;
-	private int current;
-	
+	private final ServersManager serversManager;
 	private Connection self;
 	private MsgHandler connectHandler;
-	private Connection.MsgProcessor processor;
+	private MsgProcessor processor;
 
 	private Properties opts;
 	private SocketChannel channel;
@@ -96,6 +95,12 @@ public class Connection {
 	private int bytes_received;
 	
 	private volatile boolean reconnecting;
+	private int reconnectCount = -1;
+
+	private Object connectionId;
+
+	private long reconnect_time_wait;
+	private static AtomicInteger idGenerator = new AtomicInteger(0);
 	
 	static {
 		ssid = 1;
@@ -130,6 +135,7 @@ public class Connection {
 		if (!popts.containsKey("ssl")) popts.put("ssl", new Boolean(false));
 		if (!popts.containsKey("max_reconnect_attempts")) popts.put("max_reconnect_attempts", new Integer(DEFAULT_MAX_RECONNECT_ATTEMPTS));
 		if (!popts.containsKey("reconnect_time_wait")) popts.put("reconnect_time_wait", new Integer(DEFAULT_RECONNECT_TIME_WAIT));
+		if (!popts.containsKey("ping_interval")) popts.put("ping_interval", new Long(DEFAULT_PING_INTERVAL));
 		if (!popts.containsKey("dont_randomize_servers")) popts.put("dont_randomize_servers", Boolean.FALSE);
 
 		// Overriding with ENV
@@ -138,6 +144,7 @@ public class Connection {
 		if (System.getenv("NATS_PEDANTIC") != null) popts.put("pedantic", new Boolean(System.getenv("NATS_PEDANTIC")));
 		if (System.getenv("NATS_DEBUG") != null) popts.put("debug", new Boolean(System.getenv("NATS_DEBUG")));
 		if (System.getenv("NATS_RECONNECT") != null) popts.put("reconnect", new Boolean(System.getenv("NATS_RECONNECT")));
+		if (System.getenv("NATS_PING_INTERVAL") != null) popts.put("ping_interval", new Long(System.getenv("NATS_PING_INTERVAL")));
 		if (System.getenv("NATS_FAST_PRODUCER") != null) popts.put("fast_producer", new Boolean(System.getenv("NATS_FAST_PRODUCER")));
 		if (System.getenv("NATS_SSL") != null) popts.put("ssl", new Boolean(System.getenv("NATS_SSL")));
 		if (System.getenv("NATS_MAX_RECONNECT_ATTEMPTS") != null) popts.put("max_reconnect_attempts", Integer.parseInt(System.getenv("NATS_MAX_RECONNECT_ATTEMPTS")));
@@ -146,31 +153,69 @@ public class Connection {
 
 	protected Connection(Properties popts, MsgHandler handler) throws IOException, InterruptedException {
 		self = this;
-		processor = new MsgProcessor();
-		sendBuffer = ByteBuffer.allocateDirect(INIT_BUFFER_SIZE);
-		lastPos = 0;
-		receiveBuffer = ByteBuffer.allocateDirect(INIT_BUFFER_SIZE);
-		status = AWAITING_CONTROL;
-		msgs_sent = bytes_sent = 0;
-		subs = new ConcurrentHashMap<Integer, Subscription>();
-		pongs = new LinkedList<MsgHandler>();
+    opts = popts;
+    sendBuffer = ByteBuffer.allocateDirect(INIT_BUFFER_SIZE);
+    lastPos = 0;
+    receiveBuffer = ByteBuffer.allocateDirect(INIT_BUFFER_SIZE);
+    status = 0;
+    msgs_sent = (bytes_sent = 0);
+    subs = new ConcurrentHashMap();
+    pongs = new LinkedList();
+    connectionId = idGenerator.incrementAndGet();
+		reconnect_time_wait = ((Integer)opts.get("reconnect_time_wait")).intValue();
+    
+    Server[] servers = configServers();
+		int max_reconnect_attempts = ((Integer)opts.get("max_reconnect_attempts")).intValue();
+    serversManager = new ServersManager(servers,max_reconnect_attempts);
+    this.timer = new Timer("NATS_Timer-" + this.connectionId);
+    
+    this.reconnecting = false;
+    if (handler != null) {
+      this.connectHandler = handler;
+    }
+    initialConnect();
+    
+    connectionSequence();
+    
+    numConnections += 1;	
+  }
 
-		opts = popts;
-		configServers();
-		timer = new Timer("NATS_Timer-" + numConnections);
-		reconnecting = false;
-		current = 0;
-
-		connect();
-		
-		if (handler != null)
-			connectHandler = handler;
-		processor.start();    	
-		sendConnectCommand();
-		numConnections++;
-	}
+	/*
+	 * Follow the same sequence whenever a new connection is made.
+	 * Basically we want to start fresh each time, without any "junk" 
+	 * from previous connections, if there were such
+	 */
+	protected void connectionSequence()
+	    throws IOException
+	{
+		synchronized(sendBuffer) {
+			lastPos = 0;
+			sendBuffer.clear();
+	    receiveBuffer.clear();
+			timer.purge();
+	    
+	    //setup a periodic ping so a client that only consumes messages will still notice
+	    //when the socket is closed. Otherwise he'll just be stuck on SocketChannel.read forever
+	    long pingInterval = ((Long)this.opts.get("ping_interval")).intValue();
+	    this.timer.schedule(new TimerTask(){
+	      public void run(){
+	        try{
+	          sendPing(new MsgHandler() {});
+	        } catch (IOException e){
+						logger.debug("run - pinger has identified that connection is down - will reconnect",logger.isTraceEnabled()?e:null);
+	          reconnect();
+	        }
+	      }
+	    }, pingInterval, pingInterval);
 	
-	private void configServers() {
+	    reconnectCount += 1;
+	    processor = new MsgProcessor(channel);
+	    processor.setName("NATS Message Processor-" + this.connectionId + "-" + this.reconnectCount);
+	    processor.start();
+	    sendConnectCommand();
+		}
+	}	
+	private Server[] configServers() {
 		String[] serverStrings = null;
 		if (opts.containsKey("uris")) 
 			serverStrings = ((String)opts.get("uris")).split(",");
@@ -179,44 +224,73 @@ public class Connection {
 		else if (opts.containsKey("uri"))
 			serverStrings = ((String)opts.get("uri")).split(",");
 
-		servers = new Server[serverStrings.length];
+		Server[] servers = new Server[serverStrings.length];
 		Random rand = (((Boolean)opts.get("dont_randomize_servers")) == Boolean.TRUE ? null : new Random());
-		String[] uri;
 		for(int i = 0; i < serverStrings.length; i++) {
 			int idx = i;
 			for(;rand != null;) {
 				idx = rand.nextInt(servers.length);
 				if (servers[idx] == null) break;
 			}
-			uri = serverStrings[i].split(":");
-			servers[idx] = new Server();
-			if (serverStrings[i].contains("@")) {
-				servers[idx].user = uri[1].substring(2, uri[1].length());
-				servers[idx].pass = uri[2].split("@")[0];				
-				servers[idx].host = uri[2].split("@")[1];
-				servers[idx].port = Integer.parseInt(uri[3]);
-			}
-			else {
-				servers[idx].user = null;
-				servers[idx].pass = null;
-				servers[idx].host = uri[1].substring(2, uri[1].length());
-				servers[idx].port = Integer.parseInt(uri[2]);
-			}
+			final String currServerString = serverStrings[i];
+			servers[idx] = createServer(currServerString);
 		}
+		
+		return servers;
+	}
+
+	protected Server createServer(final String currServerString) {
+		String[] uri;
+		uri = currServerString.split(":");
+		final Server newServer;
+		if (currServerString.contains("@")) {
+			String user = uri[1].substring(2, uri[1].length());
+			String pass = uri[2].split("@")[0];				
+			String host = uri[2].split("@")[1];
+			int port = Integer.parseInt(uri[3]);
+			newServer = new Server(host,port,user,pass);
+		}
+		else {
+			String host = uri[1].substring(2, uri[1].length());
+			int port = Integer.parseInt(uri[2]);
+			newServer = new Server(host,port);
+		}
+		return newServer;
 	}
 	
-	private boolean connect() throws IOException {
-		try {
-			InetSocketAddress addr = new InetSocketAddress(servers[current].host, servers[current].port);
-			channel = SocketChannel.open(addr);
-			while(!channel.isConnected()){}			
-			servers[current].connected = true;
-		} catch(Exception ie) {
-			ie.printStackTrace();
-			return false;
+	private boolean initialConnect() throws IOException {
+		boolean success = false;
+		for(Server currServer = serversManager.getNextToConnectTo(); !success && currServer!=null; currServer = serversManager.getNextToConnectTo()) {
+			success = connect();
+			if (!success){
+				try {
+					currServer.markFailedToConnect();
+					Thread.sleep(reconnect_time_wait);
+				} catch (InterruptedException e) {
+        	logger.error("sleep interrupted:",e);
+				}
+			}
 		}
-
-		return true;
+		
+		return success;
+	}
+	private boolean connect() throws IOException {
+		boolean success = false;
+		Server currServer = serversManager.getServer();
+		if (currServer!=null){
+			try {
+				InetSocketAddress addr = new InetSocketAddress(currServer.getHost(), currServer.getPort());
+				channel = SocketChannel.open(addr);
+				while(!channel.isConnected()){}			
+				currServer.markConnectedSuccessfully();
+				success = true;
+				logger.info("Connection to {} was successfully established",currServer, logger.isDebugEnabled()?new Exception("Trace"):null);
+			} catch(Exception ie) {
+				logger.error("failed to connect to {}",currServer,ie);
+			}
+		}
+		
+		return success;
 	}
 
 	private String hexRand(int limit, Random rand) {
@@ -248,9 +322,9 @@ public class Connection {
 			user = (String)opts.getProperty("user");
 			pass = (String)opts.getProperty("pass");
 		}
-		if (servers[current].user != null) {
-			user = servers[current].user;
-			pass = servers[current].pass;			
+		if (serversManager.getServer().getUser() != null) {
+			user = serversManager.getServer().getUser();
+			pass = serversManager.getServer().getPass();			
 		}
 
 		if (user != null) sb.append(",\"user\":\"").append(user).append("\"");
@@ -279,8 +353,9 @@ public class Connection {
 			flush();
 		channel.close();
 		numConnections--;
+		processor.close();
 		processor.interrupt();
-		timer.purge();
+		timer.cancel();
 	}
 
 	/**
@@ -288,7 +363,7 @@ public class Connection {
 	 * @return connection status
 	 */
 	public boolean isConnected() {
-		return channel.isConnected();
+		return channel!=null && channel.isConnected();
 	}
 
 	/**
@@ -463,9 +538,21 @@ public class Connection {
 				flushPending();
 				// Reallocating send buffer if bufferoverflow occurs too frequently
 				if (sendBuffer.capacity() < MAX_BUFFER_SIZE) {
-					if ((System.currentTimeMillis() - lastOverflow) < REALLOCATION_THRESHOLD)
+					
+					//limit the amount of allocations in order to not run out of memory in exterem cases
+					if ((System.currentTimeMillis() - lastOverflow) < REALLOCATION_THRESHOLD
+							&&
+							sendBuffer.capacity()<MAX_BUFFER_SIZE){
 						sendBuffer = ByteBuffer.allocateDirect(sendBuffer.capacity()*2);
-					lastOverflow = System.currentTimeMillis();
+						lastOverflow = System.currentTimeMillis();
+					}
+				} else {
+					//there's no chance of succeeding at this point - we got a buffer overflow, without any way
+					//of increasing it any further. We'll drop the message and notify sender.
+					logger.warn("send buffer maximal capacity({} bytes) was insufficient - operation will fail. current capacity-{}, data size = {}, remaining buffer size={}",MAX_BUFFER_SIZE, sendBuffer.capacity(), length, sendBuffer.remaining(), bofe);
+					lastPos = 0;
+					sendBuffer.clear();
+					throw bofe;
 				}
 			}
 		}		
@@ -473,16 +560,19 @@ public class Connection {
 	
 	private void flushPending() {
 		synchronized(sendBuffer) {
-			if ((lastPos = sendBuffer.position()) > 0) {
-				try {
-					sendBuffer.flip();
-					for(;;) {
-						if (sendBuffer.position() >= sendBuffer.limit()) break;
-						channel.write(sendBuffer);
-					}		
-					sendBuffer.clear();
-				} catch (IOException ie) {
-					reconnect();
+			if (isConnected()){
+				if ((lastPos = sendBuffer.position()) > 0) {
+					try {
+						sendBuffer.flip();
+						for(;;) {
+							if (sendBuffer.position() >= sendBuffer.limit()) break;
+							channel.write(sendBuffer);
+						}		
+						sendBuffer.clear();
+					} catch (IOException ie) {
+						logger.debug("flushPending - got exception while trying to write to buffer - will reconnect",logger.isTraceEnabled()?ie:null);
+						reconnect();
+					}
 				}
 			}
 		}
@@ -578,7 +668,7 @@ public class Connection {
 				try {
 					if (auto_unsubscribe) parent.unsubscribe(sid);
 				} catch(IOException e) {
-					e.printStackTrace();
+					logger.error("could not unsubscribe",e);
 				}
 				
 				if (handler != null) handler.execute(sid);
@@ -587,15 +677,29 @@ public class Connection {
 		timer.schedule(task, tout * 1000);
 		sub.task = task;
 	}
-	
-	private void reconnect() {
+
+	/*
+	 * Tries to reconnect to the NATS cluster.
+	 * If this method fails, there is really no pint in trying to keep using the client.
+	 * It's best to try and recreate it in such cases.
+	 */
+	private boolean reconnect() {
+		logger.debug("reconnect - starting");
+		
+		//short circuit nested calls
+		if (reconnecting){
+			return false;
+		}
+		reconnecting = true;
 		boolean doReconnect = ((Boolean)opts.get("reconnect")).booleanValue();
 
-		processor.interrupt();
+		processor.close();
+    processor.interrupt();
+
+    logger.debug("reconnect - processor signaled to close");
 		if (doReconnect) {
 			synchronized(sendBuffer) {
-				int max_reconnect_attempts = ((Integer)opts.get("max_reconnect_attempts")).intValue();
-				int reconnect_time_wait = ((Integer)opts.get("reconnect_time_wait")).intValue();
+				
 				// Salvaging unsent messages in sendBuffer
 				byte[] unsent = null;
 				if (lastPos > 0) {
@@ -605,42 +709,49 @@ public class Connection {
 					lastPos = 0;
 				}
 
-				outer:
-					for(; current < servers.length; current++) {
-						for(; servers[current].reconnect_attempts < max_reconnect_attempts; servers[current].reconnect_attempts++) {
-							try {
-								channel.close();
-								connect();
+				
+				for(Server currServer = serversManager.getNextToConnectTo(); reconnecting && currServer!=null; currServer = serversManager.getNextToConnectTo()) {
+			    logger.debug("reconnect - currServer={}",currServer);
+					currServer.markFailedToConnect();
+					try {
+						channel.close();
+						connect();
 
-								if (isConnected()) {
-									sendConnectCommand();
-									sendSubscriptions();
-									if (unsent != null)
-										sendCommand(unsent, unsent.length, false);
-									flushPending();
-									reconnecting = false;
-									servers[current].reconnect_attempts = 0;
-									break outer;
-								}	
-								Thread.sleep(reconnect_time_wait);
-							} catch(IOException ie) {
-								continue;
-							} catch (InterruptedException e) {
-								e.printStackTrace();
-							}
+						if (isConnected()) {
+					    logger.debug("reconnect - connection succeeded. channel={}",channel);
+							connectionSequence();
+							sendSubscriptions();
+							if (unsent != null)
+								sendCommand(unsent, unsent.length, false);
+							flushPending();
+							reconnecting = false;
+							currServer.markConnectedSuccessfully();
+						}	else {
+							logger.debug("reconnect - will sleep for {} before trying to reconnect again",reconnect_time_wait);
+							Thread.sleep(reconnect_time_wait);
 						}
+					} catch(IOException ie) {
+						logger.debug("reconnect - ignoring exception",logger.isTraceEnabled()?ie:null);
+						//ignore
+					} catch (InterruptedException e) {
+						logger.error("interrupted",e);
 					}
+				}
 
 				// Failing reconnection to all servers
-				if (reconnecting) return;
+				if (reconnecting) {
+			    logger.warn("NATS client was unable to reconnect to any of the cluster's servers. Will no longer function  until recreated.");
+					return false;
+				}
 			}
 		}
-		processor.run();
+		
+		return true;
 	}
 	
 	private class ReconnectTask extends TimerTask {
 		public void run() {
-			reconnecting = true;
+			logger.debug("run - starting");
 			reconnect();
 		}
 	}
@@ -683,26 +794,40 @@ public class Connection {
 		
 		private long lastTruncated;
 		private boolean reallocate;
+		private SocketChannel channel;
+		private boolean isActive = true;
 
-		public MsgProcessor() {
+		public MsgProcessor(SocketChannel channel) {
+			logger.debug("<init> - created with channel={}",channel);
 			for(int l = 0; l < INIT_BUFFER_SIZE; l++)
 				buf[l] = '\0';		
 			pos = 0;
 			payload_length = -1;
 			reallocate = false;
+			this.channel=channel;
+		}
+		
+		public void close(){
+      isActive = false;
+    }
+		
+		private boolean isConnected(){
+			return isActive && channel!=null && channel.isConnected();
 		}
 		
 		public void run() {
-			for(;;) {
+			logger.debug("run - started with isActive={}, channel={}",isActive, channel);
+			while(isConnected()) {
 				try {
 					processMessage();
 				} catch(AsynchronousCloseException ace) {
-					continue;
+					//a new instance must be created from scratch
+					return;
 				} catch (IOException e) {
-					// skipping if reconnect already starts due to -ERR code
-					if (!reconnecting) reconnect();
-					// terminating background thread if reconnect fails
-					if (!isConnected()) break;
+					//shutdown this thread and reconnect cleanly
+					logger.debug("run - ending processor and scheduling a reconnect attempt",logger.isTraceEnabled()?e:null);
+					timer.schedule(new ReconnectTask(), 0);
+					return;
 				}
 			}
 		}    	
@@ -852,5 +977,5 @@ public class Connection {
 			}
 			payload_length = Integer.parseInt(new String(buf,start,--index-start));
 		}		
-	}    
+	}
 }

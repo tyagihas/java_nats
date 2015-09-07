@@ -5,7 +5,7 @@
 	<groupId>com.github.tyagihas</groupId>
 	<artifactId>java_nats</artifactId>
 	<packaging>jar</packaging>
-	<version>0.5.1</version>
+	<version>0.5.2</version>
 	<name>Java Nats Client</name>
 	<description>Java client for Nats</description>
 	<url>https://github.com/tyagihas/java_nats.git</url>
@@ -84,6 +84,19 @@
     		</plugin>
 		</plugins>
 	</build>
+	<dependencies>
+		<dependency>
+			<groupId>org.slf4j</groupId>
+			<artifactId>slf4j-api</artifactId>
+			<version>1.7.12</version>
+		</dependency>
+		<dependency>
+			<groupId>junit</groupId>
+			<artifactId>junit</artifactId>
+			<version>4.12</version>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
 	<distributionManagement>
 	<snapshotRepository>
 		<id>ossrh</id>
