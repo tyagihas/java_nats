@@ -10,6 +10,9 @@ import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * Connection represents a bidirectional channel to NATS server. Message handler may be attached to each operation
  * which is invoked when the operation is processed by the server. A client JVM may create multiple Connection objects
@@ -20,6 +23,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class Connection {
 
+	//better be configured to be asynchronous
+  private final static Logger logger = LoggerFactory.getLogger(Connection.class);
 	private static final String version = "0.5.2";
 	
 	public static final int DEFAULT_PORT = 4222;
@@ -183,28 +188,32 @@ public class Connection {
 	protected void connectionSequence()
 	    throws IOException
 	{
-    sendBuffer.clear();
-    receiveBuffer.clear();
-		timer.purge();
-    
-    //setup a periodic ping so a client that only consumes messages will still notice
-    //when the socket is closed. Otherwise he'll just be stuck on SocketChannel.read forever
-    long pingInterval = ((Long)this.opts.get("ping_interval")).intValue();
-    this.timer.schedule(new TimerTask(){
-      public void run(){
-        try{
-          sendPing(new MsgHandler() {});
-        } catch (IOException e){
-          reconnect();
-        }
-      }
-    }, pingInterval, pingInterval);
-
-    reconnectCount += 1;
-    processor = new MsgProcessor(channel);
-    processor.setName("NATS Message Processor-" + this.connectionId + "-" + this.reconnectCount);
-    processor.start();
-    sendConnectCommand();
+		synchronized(sendBuffer) {
+			lastPos = 0;
+			sendBuffer.clear();
+	    receiveBuffer.clear();
+			timer.purge();
+	    
+	    //setup a periodic ping so a client that only consumes messages will still notice
+	    //when the socket is closed. Otherwise he'll just be stuck on SocketChannel.read forever
+	    long pingInterval = ((Long)this.opts.get("ping_interval")).intValue();
+	    this.timer.schedule(new TimerTask(){
+	      public void run(){
+	        try{
+	          sendPing(new MsgHandler() {});
+	        } catch (IOException e){
+						logger.debug("run - pinger has identified that connection is down - will reconnect",logger.isTraceEnabled()?e:null);
+	          reconnect();
+	        }
+	      }
+	    }, pingInterval, pingInterval);
+	
+	    reconnectCount += 1;
+	    processor = new MsgProcessor(channel);
+	    processor.setName("NATS Message Processor-" + this.connectionId + "-" + this.reconnectCount);
+	    processor.start();
+	    sendConnectCommand();
+		}
 	}	
 	private Server[] configServers() {
 		String[] serverStrings = null;
@@ -258,7 +267,7 @@ public class Connection {
 					currServer.markFailedToConnect();
 					Thread.sleep(reconnect_time_wait);
 				} catch (InterruptedException e) {
-        	e.printStackTrace();
+        	logger.error("sleep interrupted:",e);
 				}
 			}
 		}
@@ -275,8 +284,9 @@ public class Connection {
 				while(!channel.isConnected()){}			
 				currServer.markConnectedSuccessfully();
 				success = true;
+				logger.info("Connection to {} was successfully established",currServer, logger.isDebugEnabled()?new Exception("Trace"):null);
 			} catch(Exception ie) {
-				ie.printStackTrace();
+				logger.error("failed to connect to {}",currServer,ie);
 			}
 		}
 		
@@ -534,11 +544,13 @@ public class Connection {
 							&&
 							sendBuffer.capacity()<MAX_BUFFER_SIZE){
 						sendBuffer = ByteBuffer.allocateDirect(sendBuffer.capacity()*2);
+						lastOverflow = System.currentTimeMillis();
 					}
-					lastOverflow = System.currentTimeMillis();
 				} else {
 					//there's no chance of succeeding at this point - we got a buffer overflow, without any way
 					//of increasing it any further. We'll drop the message and notify sender.
+					logger.warn("send buffer maximal capacity({} bytes) was insufficient - operation will fail. current capacity-{}, data size = {}, remaining buffer size={}",MAX_BUFFER_SIZE, sendBuffer.capacity(), length, sendBuffer.remaining(), bofe);
+					lastPos = 0;
 					sendBuffer.clear();
 					throw bofe;
 				}
@@ -558,6 +570,7 @@ public class Connection {
 						}		
 						sendBuffer.clear();
 					} catch (IOException ie) {
+						logger.debug("flushPending - got exception while trying to write to buffer - will reconnect",logger.isTraceEnabled()?ie:null);
 						reconnect();
 					}
 				}
@@ -655,7 +668,7 @@ public class Connection {
 				try {
 					if (auto_unsubscribe) parent.unsubscribe(sid);
 				} catch(IOException e) {
-					e.printStackTrace();
+					logger.error("could not unsubscribe",e);
 				}
 				
 				if (handler != null) handler.execute(sid);
@@ -664,15 +677,29 @@ public class Connection {
 		timer.schedule(task, tout * 1000);
 		sub.task = task;
 	}
-	
-	private void reconnect() {
+
+	/*
+	 * Tries to reconnect to the NATS cluster.
+	 * If this method fails, there is really no pint in trying to keep using the client.
+	 * It's best to try and recreate it in such cases.
+	 */
+	private boolean reconnect() {
+		logger.debug("reconnect - starting");
+		
+		//short circuit nested calls
+		if (reconnecting){
+			return false;
+		}
 		reconnecting = true;
 		boolean doReconnect = ((Boolean)opts.get("reconnect")).booleanValue();
 
 		processor.close();
     processor.interrupt();
+
+    logger.debug("reconnect - processor signaled to close");
 		if (doReconnect) {
 			synchronized(sendBuffer) {
+				
 				// Salvaging unsent messages in sendBuffer
 				byte[] unsent = null;
 				if (lastPos > 0) {
@@ -684,12 +711,14 @@ public class Connection {
 
 				
 				for(Server currServer = serversManager.getNextToConnectTo(); reconnecting && currServer!=null; currServer = serversManager.getNextToConnectTo()) {
+			    logger.debug("reconnect - currServer={}",currServer);
 					currServer.markFailedToConnect();
 					try {
 						channel.close();
 						connect();
 
 						if (isConnected()) {
+					    logger.debug("reconnect - connection succeeded. channel={}",channel);
 							connectionSequence();
 							sendSubscriptions();
 							if (unsent != null)
@@ -698,24 +727,31 @@ public class Connection {
 							reconnecting = false;
 							currServer.markConnectedSuccessfully();
 						}	else {
+							logger.debug("reconnect - will sleep for {} before trying to reconnect again",reconnect_time_wait);
 							Thread.sleep(reconnect_time_wait);
 						}
 					} catch(IOException ie) {
+						logger.debug("reconnect - ignoring exception",logger.isTraceEnabled()?ie:null);
 						//ignore
 					} catch (InterruptedException e) {
-						e.printStackTrace();
+						logger.error("interrupted",e);
 					}
 				}
 
 				// Failing reconnection to all servers
-				if (reconnecting) return;
+				if (reconnecting) {
+			    logger.warn("NATS client was unable to reconnect to any of the cluster's servers. Will no longer function  until recreated.");
+					return false;
+				}
 			}
 		}
+		
+		return true;
 	}
 	
 	private class ReconnectTask extends TimerTask {
 		public void run() {
-			reconnecting = true;
+			logger.debug("run - starting");
 			reconnect();
 		}
 	}
@@ -762,6 +798,7 @@ public class Connection {
 		private boolean isActive = true;
 
 		public MsgProcessor(SocketChannel channel) {
+			logger.debug("<init> - created with channel={}",channel);
 			for(int l = 0; l < INIT_BUFFER_SIZE; l++)
 				buf[l] = '\0';		
 			pos = 0;
@@ -779,6 +816,7 @@ public class Connection {
 		}
 		
 		public void run() {
+			logger.debug("run - started with isActive={}, channel={}",isActive, channel);
 			while(isConnected()) {
 				try {
 					processMessage();
@@ -787,6 +825,7 @@ public class Connection {
 					return;
 				} catch (IOException e) {
 					//shutdown this thread and reconnect cleanly
+					logger.debug("run - ending processor and scheduling a reconnect attempt",logger.isTraceEnabled()?e:null);
 					timer.schedule(new ReconnectTask(), 0);
 					return;
 				}
