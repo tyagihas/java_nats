@@ -147,6 +147,7 @@ public class Connection {
 	protected Connection(Properties popts, MsgHandler handler) throws IOException, InterruptedException {
 		self = this;
 		processor = new MsgProcessor();
+                processor.setDaemon(true);
 		sendBuffer = ByteBuffer.allocateDirect(INIT_BUFFER_SIZE);
 		lastPos = 0;
 		receiveBuffer = ByteBuffer.allocateDirect(INIT_BUFFER_SIZE);
@@ -277,10 +278,11 @@ public class Connection {
 	public void close(boolean flush) throws IOException {
 		if (flush)
 			flush();
+                opts.put("reconnect", Boolean.FALSE);
+                timer.cancel();
 		channel.close();
 		numConnections--;
 		processor.interrupt();
-		timer.purge();
 	}
 
 	/**
