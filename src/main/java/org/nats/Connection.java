@@ -4,9 +4,15 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.BufferOverflowException;
 import java.nio.ByteBuffer;
-import java.nio.channels.*;
-import java.util.*;
+import java.nio.channels.AsynchronousCloseException;
+import java.nio.channels.SocketChannel;
+import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.Map.Entry;
+import java.util.Properties;
+import java.util.Random;
+import java.util.Timer;
+import java.util.TimerTask;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -19,7 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class Connection {
 
-	private static final String version = "0.5.1";
+	private static final String version = "0.5.2_mring";
 	
 	public static final int DEFAULT_PORT = 4222;
 	public static final String DEFAULT_URI = "nats://localhost:" + Integer.toString(DEFAULT_PORT);
@@ -62,6 +68,7 @@ public class Connection {
 
 	private static int numConnections;
 	private static volatile int ssid;
+        private final ReconnectTask reconnectTask;
 
 	private class Server {
 		public String host;
@@ -146,6 +153,7 @@ public class Connection {
 
 	protected Connection(Properties popts, MsgHandler handler) throws IOException, InterruptedException {
 		self = this;
+                reconnectTask = new ReconnectTask();
 		processor = new MsgProcessor();
                 processor.setDaemon(true);
 		sendBuffer = ByteBuffer.allocateDirect(INIT_BUFFER_SIZE);
@@ -484,7 +492,7 @@ public class Connection {
 					}		
 					sendBuffer.clear();
 				} catch (IOException ie) {
-					reconnect();
+					reconnectTask.run();
 				}
 			}
 		}
@@ -642,8 +650,10 @@ public class Connection {
 	
 	private class ReconnectTask extends TimerTask {
 		public void run() {
+                    if (!reconnecting) {
 			reconnecting = true;
 			reconnect();
+                    }
 		}
 	}
 
@@ -701,8 +711,9 @@ public class Connection {
 				} catch(AsynchronousCloseException ace) {
 					continue;
 				} catch (IOException e) {
-					// skipping if reconnect already starts due to -ERR code
-					if (!reconnecting) reconnect();
+                                        // try to reconnect
+					// will be skipped if reconnect already started due to -ERR code
+					reconnectTask.run();
 					// terminating background thread if reconnect fails
 					if (!isConnected()) break;
 				}
@@ -744,7 +755,7 @@ public class Connection {
 								if (handler.caller != null) handler.caller.interrupt();
 							}
 							else if (comp(buf, PING, 4)) sendCommand(PONG_RESPONSE, PONG_RESPONSE_LEN, true);
-							else if (comp(buf, ERR, 4)) timer.schedule(new ReconnectTask(), 0);
+							else if (comp(buf, ERR, 4)) timer.schedule(reconnectTask, 0);
 							else if (comp(buf, OK, 3)) {/* do nothing for now */}
 							else if (comp(buf, INFO, 4)) if (connectHandler != null) connectHandler.execute((Object)self);
 						}

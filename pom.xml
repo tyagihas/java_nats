@@ -5,7 +5,7 @@
 	<groupId>com.github.tyagihas</groupId>
 	<artifactId>java_nats</artifactId>
 	<packaging>jar</packaging>
-	<version>0.5.1_mring</version>
+	<version>0.5.2_mring</version>
 	<name>Java Nats Client</name>
 	<description>Java client for Nats</description>
 	<url>https://github.com/mring33621/java_nats.git</url>
