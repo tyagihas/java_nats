@@ -2,14 +2,21 @@
 
 Java client library for the [NATS messaging system](http://nats.io).
 
+Version: 0.5.2_mring
+
 ## Supported Platforms
 
 ```javascript
-java_nats currently supports following Java Platforms :
+This version of java_nats currently supports following Java Platforms :
 
-- Java Platform, Standard Edition 6 (Java SE 6)
 - Java Platform, Standard Edition 7 (Java SE 7)
+- Java Platform, Standard Edition 8 (Java SE 8)
 ```
+
+## Upcoming Changes and Additions
+- Fix any bugs found by Coverity static analysis
+- Add common base client classes
+- Add support for binary messages
 
 ## Getting Started
 
@@ -36,7 +43,7 @@ Or adding dependency to Maven pom.xml
 <dependency>
 	<groupId>com.github.tyagihas</groupId>
 	<artifactId>java_nats</artifactId>
-	<version>0.5.1</version>
+	<version>0.5.2_mring</version>
 </dependency>
 ```
 
