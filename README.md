@@ -1,4 +1,4 @@
-# Java_Nats
+# Java_Nats ![build status](https://travis-ci.org/mring33621/java_nats.svg?branch=master)
 
 Java client library for the [NATS messaging system](http://nats.io).
 
