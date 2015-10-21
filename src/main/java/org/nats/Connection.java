@@ -21,9 +21,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * by calling {@link #connect(java.util.Properties popts)} multiple times.
  * 
  * @author Teppei Yagihashi
+ * @author Matthew Ring
  *
  */
-public class Connection {
+public class Connection implements AutoCloseable {
 
 	private static final String version = "0.5.2_mring";
 	
