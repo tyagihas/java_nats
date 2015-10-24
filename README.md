@@ -2,7 +2,9 @@
 
 Java client library for the [NATS messaging system](http://nats.io).
 
-Version: 0.5.2_mring
+Now supports both String and raw binary messages!
+
+Version: 0.5.3_mring
 
 ## Supported Platforms
 
@@ -16,7 +18,7 @@ This version of java_nats currently supports following Java Platforms :
 ## Upcoming Changes and Additions
 - Fix any bugs found by Coverity static analysis
 - Add common base client classes
-- Add support for binary messages
+- ~~Add support for binary messages~~
 
 ## Getting Started
 
@@ -43,7 +45,7 @@ Or adding dependency to Maven pom.xml
 <dependency>
 	<groupId>com.github.tyagihas</groupId>
 	<artifactId>java_nats</artifactId>
-	<version>0.5.2_mring</version>
+	<version>0.5.3_mring</version>
 </dependency>
 ```
 
