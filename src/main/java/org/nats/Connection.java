@@ -6,6 +6,7 @@ import java.nio.BufferOverflowException;
 import java.nio.ByteBuffer;
 import java.nio.channels.AsynchronousCloseException;
 import java.nio.channels.SocketChannel;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.Map.Entry;
@@ -26,7 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class Connection implements AutoCloseable {
 
-	private static final String version = "0.5.2_mring";
+	private static final String version = "0.5.3_mring";
 	
 	public static final int DEFAULT_PORT = 4222;
 	public static final String DEFAULT_URI = "nats://localhost:" + Integer.toString(DEFAULT_PORT);
@@ -149,7 +150,8 @@ public class Connection implements AutoCloseable {
 		if (System.getenv("NATS_FAST_PRODUCER") != null) popts.put("fast_producer", new Boolean(System.getenv("NATS_FAST_PRODUCER")));
 		if (System.getenv("NATS_SSL") != null) popts.put("ssl", new Boolean(System.getenv("NATS_SSL")));
 		if (System.getenv("NATS_MAX_RECONNECT_ATTEMPTS") != null) popts.put("max_reconnect_attempts", Integer.parseInt(System.getenv("NATS_MAX_RECONNECT_ATTEMPTS")));
-		if (System.getenv("NATS_MAX_RECONNECT_TIME_WAIT") != null) popts.put("max_reconnect_time_wait", Integer.parseInt(System.getenv("NATS_MAX_RECONNECT_TIME_WAIT")));		
+		// TODO: max_reconnect_time_wait is never used!
+                if (System.getenv("NATS_MAX_RECONNECT_TIME_WAIT") != null) popts.put("max_reconnect_time_wait", Integer.parseInt(System.getenv("NATS_MAX_RECONNECT_TIME_WAIT")));		
 	}
 
 	protected Connection(Properties popts, MsgHandler handler) throws IOException, InterruptedException {
@@ -303,7 +305,7 @@ public class Connection implements AutoCloseable {
 	}
 
 	/**
-	 * Publish a message to the given subject.
+	 * Publish a String message to the given subject.
 	 * @param subject
 	 * @param msg a message to be delivered to the server
 	 * @throws IOException
@@ -311,9 +313,19 @@ public class Connection implements AutoCloseable {
 	public void publish(String subject, String msg) throws IOException {
 		publish(subject, null, msg, null);
 	}
+        
+        /**
+	 * Publish a binary message to the given subject.
+	 * @param subject
+	 * @param binMsg a binary message to be delivered to the server
+	 * @throws IOException
+	 */
+	public void publish(String subject, byte[] binMsg) throws IOException {
+		publish(subject, null, binMsg, null);
+	}
 
 	/**
-	 * Publish a message to the given subject.
+	 * Publish a String message to the given subject.
 	 * @param subject
 	 * @param msg a message to be delivered to the server
 	 * @param handler event handler is invoked when publish has been processed by the server.
@@ -322,9 +334,20 @@ public class Connection implements AutoCloseable {
 	public void publish(String subject, String msg, MsgHandler handler) throws IOException {
 		publish(subject, null, msg, handler);
 	}
+        
+        /**
+	 * Publish a binary message to the given subject.
+	 * @param subject
+	 * @param binMsg a binary message to be delivered to the server
+	 * @param handler event handler is invoked when publish has been processed by the server.
+	 * @throws IOException
+	 */
+	public void publish(String subject, byte[] binMsg, MsgHandler handler) throws IOException {
+		publish(subject, null, binMsg, handler);
+	}
 
 	/**
-	 * Publish a message to the given subject, with optional reply and event handler.
+	 * Publish a String message to the given subject, with optional reply and event handler.
 	 * @param subject
 	 * @param opt_reply
 	 * @param msg a message to be delivered to the server
@@ -358,11 +381,55 @@ public class Connection implements AutoCloseable {
 		
 		if (handler != null) sendPing(handler);
 	}
+        
+        /**
+	 * Publish a binary message to the given subject, with optional reply and event handler.
+	 * @param subject
+	 * @param opt_reply
+	 * @param binMsg a binary message to be delivered to the server
+	 * @param handler event handler is invoked when publish has been processed by the server.
+	 * @throws IOException
+	 */
+        public void publish(String subject, String opt_reply, byte[] binMsg, MsgHandler handler) throws IOException {
+		if (subject == null) return;
+
+		int offset = bytesCopy(cmd, 0, "PUB ");
+		offset = bytesCopy(cmd, offset, subject);
+		cmd[offset++] = 0x20; // SPC
+		if (opt_reply != null)  {
+			offset = bytesCopy(cmd, offset, opt_reply);
+			cmd[offset++] = 0x20;
+		}
+		offset = bytesCopy(cmd, offset, Integer.toString(binMsg.length));
+		cmd[offset++] = 0xd; // CRLF
+		cmd[offset++] = 0xa;
+		offset = bytesCopy(cmd, offset, binMsg);
+		cmd[offset++] = 0xd; // CRLF
+		cmd[offset++] = 0xa;
+
+		sendCommand(cmd, offset, false);
+
+		if (binMsg != null) {
+			msgs_sent++;
+			bytes_sent += binMsg.length;
+		}
+		
+		if (handler != null) sendPing(handler);
+	}
 
 	private int bytesCopy(byte[] b, int start, String data) {
 		int end = start + data.length();
 		for(int idx = 0; start < end; start++, idx++)
 			b[start] = (byte)data.charAt(idx);
+
+		return end;
+	}
+        
+        private int bytesCopy(byte[] b, int start, byte[] data) {
+                // TODO: replace iteration with array copy
+		int end = start + data.length;
+		for(int idx = 0; start < end; start++, idx++)
+			b[start] = data[idx];
 
 		return end;
 	}
@@ -752,7 +819,12 @@ public class Connection implements AutoCloseable {
 								synchronized(pongs) {
 									handler = pongs.poll();
 								}
-								processEvent(null, handler);
+                                                                if (handler.arity == -2) {
+                                                                    processEvent((byte[])null, handler);
+                                                                } else {
+                                                                    processEvent((String)null, handler);
+                                                                }
+								
 								if (handler.caller != null) handler.caller.interrupt();
 							}
 							else if (comp(buf, PING, 4)) sendCommand(PONG_RESPONSE, PONG_RESPONSE_LEN, true);
@@ -763,7 +835,10 @@ public class Connection implements AutoCloseable {
 						break;
 					case AWAITING_MSG_PAYLOAD :
 						receiveBuffer.get(buf, 0, payload_length + 2);
-						on_msg(new String(buf, 0, payload_length)); 
+                                                final byte[] msgPayload = Arrays.copyOf(buf, payload_length);
+                                                // TODO: parallelize or pick one based on TBD logic
+                                                on_msg(msgPayload);
+						on_msg(new String(msgPayload)); 
 						pos = 0;
 						status = AWAITING_CONTROL;
 						subject = null;
@@ -811,7 +886,26 @@ public class Connection implements AutoCloseable {
 				sub.task = null;
 			}
 		}
-		
+                
+		private void on_msg(byte[] msg) throws IOException {
+			msgs_received++;
+			if (msg != null) bytes_received+=msg.length;
+
+			sub.received++;
+			if (sub.max != -1) {
+				if (sub.max < sub.received)
+					return;
+				else if (sub.max == sub.received)
+					subs.remove(sub.sid);
+			}
+			processEvent(msg, sub.handler);
+			
+			if ((sub.task != null) && (sub.received >= sub.expected)) {
+				sub.task.cancel();
+				sub.task = null;
+			}
+		}
+                
 		private void processEvent(String msg, MsgHandler handler) throws IOException {
 			switch(handler.arity) {
 			case 0 :
@@ -828,6 +922,14 @@ public class Connection implements AutoCloseable {
 				break;
 			case -1 :
 				handler.execute((Object)msg);
+				break;
+			}
+		}
+                
+                private void processEvent(byte[] msg, MsgHandler handler) throws IOException {
+			switch(handler.arity) {
+			case -2 :
+				handler.execute(msg);
 				break;
 			}
 		}
