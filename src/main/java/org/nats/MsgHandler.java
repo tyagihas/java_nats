@@ -10,6 +10,7 @@ public abstract class MsgHandler {
 	private static final Class<?>[] ARITY2 = {String.class, String.class};
 	private static final Class<?>[] ARITY3 = {String.class, String.class, String.class};
 	private static final Class<?>[] OBJ = {Object.class};
+        private static final Class<?>[] BIN = {byte[].class};
 
 	private static final String className = "org.nats.MsgHandler";
 	public Thread caller;
@@ -24,6 +25,7 @@ public abstract class MsgHandler {
 	public void execute(String msg, String reply) {}
 	public void execute(String msg, String reply, String subject) {}		
 	public void execute(Object o) {}
+        public void execute(byte[] binMsg) {}
 	
 	private void verifyArity() {
 		try {
@@ -37,6 +39,8 @@ public abstract class MsgHandler {
 				arity = 3;
 			else if (!getClass().getMethod("execute", OBJ).getDeclaringClass().getName().equals(className))
 				arity = -1;
+                        else if (!getClass().getMethod("execute", BIN).getDeclaringClass().getName().equals(className))
+				arity = -2;
 		} catch (Exception e) {
 			e.printStackTrace();
 		}			
