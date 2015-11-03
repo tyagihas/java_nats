@@ -888,7 +888,9 @@ public class Connection {
 						receiveBuffer.get(buf, 0, payload_length + 2);
 						on_msg(); 
 						pos = 0;
-						status = AWAITING_CONTROL;					
+						status = AWAITING_CONTROL;
+						subject = null;
+						optReply = null;
 						break;
 					}
 				}
