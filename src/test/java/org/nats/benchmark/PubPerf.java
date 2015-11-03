@@ -17,6 +17,7 @@ public class PubPerf {
 		Connection conn = Connection.connect(prop);
 
 		System.out.println("Performing Publish performance test");
+		byte[] arr = new byte[val.getBytes().length];
 		final long start = System.nanoTime();
 		for(int i = 1; i <= loop; i++) {
 			conn.publish("hello", null, val, null);
@@ -25,7 +26,7 @@ public class PubPerf {
 		}
 		
 		conn.flush(new MsgHandler() {
-			public void execute(Object o) {
+			public void execute() {
 				double elapsed = System.nanoTime() - start;
 				System.out.println("\nelapsed : " + Double.toString(elapsed / 1000000000) + " seconds");
 				System.out.println("msg/sec : " + Double.toString(loop / (elapsed / 1000000000)));	
@@ -33,6 +34,5 @@ public class PubPerf {
 		});
 		
 		conn.close();		
-		System.exit(0);
 	}	
 }

@@ -7,36 +7,19 @@ Java client library for the [NATS messaging system](http://nats.io).
 ```javascript
 java_nats currently supports following Java Platforms :
 
-- Java Platform, Standard Edition 6 (Java SE 6)
 - Java Platform, Standard Edition 7 (Java SE 7)
+- Java Platform, Standard Edition 8 (Java SE 8)
 ```
 
 ## Getting Started
 
-Compiling from source files
-
-```bash
-Download source files and "cd" to java_nats root directory :
-% cd <java_nats>
-
-Compile :
-% javac -d ./bin ./src/main/java/org/nats/*.java
-% export CLASSPATH=./bin
-% javac -d ./bin ./src/test/java/org/nats/benchmark/*.java
-% javac -d ./bin ./src/test/java/org/nats/examples/*.java
-
-Run :
-cd ./bin
-% ./PubPerf.sh 100000 16
-```
-
-Or adding dependency to Maven pom.xml
+Add dependency to Maven pom.xml
 
 ```xml
 <dependency>
 	<groupId>com.github.tyagihas</groupId>
 	<artifactId>java_nats</artifactId>
-	<version>0.5.1</version>
+	<version>0.5.2</version>
 </dependency>
 ```
 
@@ -138,11 +121,28 @@ conn.subscribe(args[0], opt, new MsgHandler() {
 
 ```java
 Properties opts = new Properties();
-opts.put("servers", "nats://user1:pass1@server1,nats://user1:pass1@server2:4243");
+opts.put("servers", "nats://user1:pass1@server1:4242,nats://user2:pass2@server2:4243");
 
 Connection conn = Connection.connect(opts);
 conn.publish("hello", "world");
 
+```
+
+## Binary messages
+
+```java
+byte[] bmsg = "Hello World!".getBytes();
+
+conn1.subscribe(new MsgHandler() {
+	// Receiving a message as a byte array
+	public void execute(byte[] msg) {
+		System.out.println("Received : " + new String(msg));
+	}
+});
+conn1.flush();
+
+// Publishing a byte array message
+conn2.publish("test", bmsg);
 ```
 
 ## Advanced Usage
