@@ -624,7 +624,7 @@ public class Connection {
 	 * @return subscription ID
 	 * @throws IOException
 	 */
-	public Integer requst(String subject, byte[] msg, Properties popts, MsgHandler handler) throws IOException {
+	public Integer request(String subject, byte[] msg, Properties popts, MsgHandler handler) throws IOException {
 		return request(subject, null, msg, popts, handler);
 	}
 	
