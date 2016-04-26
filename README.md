@@ -1,15 +1,12 @@
 # Java_Nats
 
-Java client library for the [NATS messaging system](http://nats.io).
+Java client library and server testing module for [NATS messaging system](http://nats.io).
 
 ## Supported Platforms
 
-```javascript
 java_nats currently supports following Java Platforms :
-
 - Java Platform, Standard Edition 7 (Java SE 7)
 - Java Platform, Standard Edition 8 (Java SE 8)
-```
 
 ## Getting Started
 
@@ -19,7 +16,7 @@ Add dependency to Maven pom.xml
 <dependency>
 	<groupId>com.github.tyagihas</groupId>
 	<artifactId>java_nats</artifactId>
-	<version>0.5.2</version>
+	<version>0.6.0</version>
 </dependency>
 ```
 
@@ -55,7 +52,7 @@ sid = conn.request("help", new MsgHandler() {
 		System.out.println("Got a response for help : " + reponse);
 	}
 });
-		
+
 // Replies
 conn.subscribe("help", new MsgHandler() {
 	public void execute(String request, String replyTo) {
@@ -202,11 +199,30 @@ Connection conn2 = Connection.connect(new Properties(), new MsgHandler() {
 
 See examples and benchmarks for more information..
 
+## Nats Embedded Server (beta)
+
+Start a Nats Embedded Server from Java application.
+```java
+Properties props = new Properties();
+props.setProperty("port", "4222");
+
+NatsEmbeddedServer server = new NatsEmbeddedServer(props);
+```
+
+Start a Nats Embedded Server from command line. Assume CLASSPATH contains java_nats and slf4j jar files.
+```bash
+% java -Dorg.slf4j.simpleLogger.defaultLogLevel=DEBUG -Xms1G -Xmx1G org.nats.server.NatsEmbeddedServer
+```
+
+Nats Embedded Server is intended for dev and unit testing and not for production use. Following features haven't been implemented in Nats Embedded Server.
+* SSL/TSL
+* Clustering
+
 ## License
 
-(The MIT License)
+The MIT License (MIT)
 
-Copyright (c) 2012-2015 Teppei Yagihashi
+Copyright (c) 2012-2016 Teppei Yagihashi
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to
@@ -225,5 +241,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 IN THE SOFTWARE.
-
-

@@ -8,25 +8,27 @@ import org.nats.*;
 public class Request {
 
 	public static void main(String[] args) throws Exception {
-		final Connection conn = Connection.connect(new Properties());
+		final Connection conn1 = Connection.connect(new Properties());
 
 		System.out.println("Subscribing...");		
-		conn.subscribe("help", new MsgHandler() {
+		conn1.subscribe("help", new MsgHandler() {
 			public void execute(String request, String replyTo) {
 				try {
-					conn.publish(replyTo, "I can help!");
+					conn1.publish(replyTo, "I can help!");
 				} catch (IOException e) {
 					e.printStackTrace();
-				}				
+				}
 			}
-		});		
+		});
+		conn1.flush();
 
-		System.out.println("Sending a request...");		
-		Integer sid = conn.request("help", new MsgHandler() {
+		final Connection conn2 = Connection.connect(new Properties());
+		conn2.request("help", new MsgHandler() {
 			public void execute(String response) {
 				System.out.println("Got a response for help : " + response);
 				System.exit(0);
 			}
 		});
+		conn2.flush();
 	}
 }

@@ -1,3 +1,2 @@
 org.nats
-org.nats.benchmark
-org.nats.examples
+org.nats.server

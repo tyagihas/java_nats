@@ -1,7 +1,32 @@
+/**
+The MIT License (MIT)
+
+Copyright (c) 2012-2016 Teppei Yagihashi
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to
+deal in the Software without restriction, including without limitation the
+rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+IN THE SOFTWARE.
+**/
+
 package org.nats;
 
+import static org.nats.common.Constants.*;
+
 import java.io.IOException;
-import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.nio.BufferOverflowException;
 import java.nio.BufferUnderflowException;
@@ -12,6 +37,8 @@ import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
+import org.nats.common.NatsMonitor;
+import org.nats.common.NatsUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -19,80 +46,21 @@ import org.slf4j.LoggerFactory;
  * Connection represents a bidirectional channel to NATS server. Message handler may be attached to each operation
  * which is invoked when the operation is processed by the server. A client JVM may create multiple Connection objects
  * by calling {@link #connect(java.util.Properties popts)} multiple times.
- * 
  * @author Teppei Yagihashi
- *
  */
-public class Connection {
+public class Connection implements NatsMonitor.Resource {
 
-	private static final String version = "0.5.2";
-	
 	private Logger LOG = LoggerFactory.getLogger(Connection.class);
 	
-	public static final int DEFAULT_PORT = 4222;
-	public static final String DEFAULT_URI = "nats://localhost:" + Integer.toString(DEFAULT_PORT);
-
-	// Parser state
-	private static final int AWAITING_CONTROL = 0;
-	private static final int AWAITING_MSG_PAYLOAD = 1;
-	// Connection state
-	private static final int OPEN = 0;
-	private static final int CLOSE = 1;
-	private static final int RECONNECT = 2;
-
-	// Reconnect Parameters, 2 sec wait, 10 tries
-	public static final int DEFAULT_RECONNECT_TIME_WAIT = 2*1000;
-	public static final int DEFAULT_MAX_RECONNECT_ATTEMPTS = 3;
-	public static final int DEFAULT_PING_INTERVAL = 4*1000;
-	
-	public static final int MAX_PENDING_SIZE = 32768;
-	public static final int INIT_BUFFER_SIZE = 1 * 1024 * 1024; // 1 Mb
-	public static final int MAX_BUFFER_SIZE = 16 * 1024 * 1024; // 16 Mb
-	public static final long REALLOCATION_THRESHOLD = 1 * 1000; // 1 second
-	
-	private static final String CR_LF = "\r\n";
-	private static final int CR_LF_LEN = CR_LF.length();
-	protected static final String EMPTY = "";
-	private static final String SPC = " ";
-
-	// Protocol
-	private static final byte[] PUB = "PUB".getBytes();
-	private static final byte[] SUB = "SUB".getBytes();
-	private static final byte[] UNSUB = "UNSUB".getBytes();
-	private static final byte[] CONNECT = "CONNECT".getBytes();
-	private static final byte[] MSG = "MSG".getBytes();
-	private static final byte[] PONG = "PONG".getBytes();
-	private static final byte[] PING = "PING".getBytes();
-	private static final byte[] INFO = "INFO".getBytes();
-	private static final byte[] ERR = "-ERR".getBytes();
-	private static final byte[] OK = "+OK".getBytes();
-
-	// Responses
-	private static final byte[] PING_REQUEST = ("PING" + CR_LF).getBytes();
-	private static final int PING_REQUEST_LEN = PING_REQUEST.length;
-	private static final byte[] PONG_RESPONSE = ("PONG" + CR_LF).getBytes();
-	private static final int PONG_RESPONSE_LEN = PONG_RESPONSE.length;
-
 	private static int numConnections;
 	private static volatile int ssid;
 
-	private class Server {
-		public String host;
-		public int port;
-		public String user;
-		public String pass;
-		public boolean connected = false;
-		public int reconnect_attempts = 0;
-	}
-	private Server[] servers;
-	private int current;
-	
 	private static ConcurrentHashMap<String, Connection> conns;
-	private static Pinger pinger = null;
+	private static NatsMonitor monitor = null;
     
 	private Connection self;
 	private MsgHandler connectHandler;
-	private int id;
+	private String id;
 	private MsgProcessor msgProc;
 	private Thread processor;
 
@@ -102,6 +70,8 @@ public class Connection {
 	private int lastPos;
 	private ByteBuffer receiveBuffer;
 	private byte[] cmd = new byte[INIT_BUFFER_SIZE];
+	
+	private NatsUtil nUtil;
 	
 	private int status;
 	private ConcurrentHashMap<Integer, Subscription> subs;    
@@ -117,36 +87,6 @@ public class Connection {
 		conns = new ConcurrentHashMap<String, Connection>();
 	}	
 	
-	private static class Pinger extends Thread {
-		private static final Logger LOG = LoggerFactory.getLogger(Pinger.class);
-		public Pinger() {
-			super("pinger");
-			setDaemon(true);
-		}
-
-		@Override
-		public void run() {
-			MsgHandler pingHandler = new MsgHandler() {};
-			int ping_interval = (System.getenv("NATS_PING_INTERVAL") == null) ? DEFAULT_PING_INTERVAL : Integer.parseInt(System.getenv("NATS_PING_INTERVAL"));		
-			for(;;) {
-				try {
-					Thread.sleep(ping_interval);
-					for(Enumeration<Connection> e = conns.elements(); e.hasMoreElements();) {
-						Connection conn = e.nextElement();
-						if ((conn != null) && (conn.isConnected()))
-							conn.sendPing(pingHandler);
-					}
-				} catch(IOException ie) {
-					LOG.error(ie.getMessage());
-					break;
-				} catch (InterruptedException e) {
-					LOG.info(e.getMessage());
-					break;
-				}
-			}			
-		}
-	}
-
 	/** 
 	 * Create and return a Connection with various attributes. 
 	 * @param popts Properties object containing connection attributes
@@ -192,7 +132,7 @@ public class Connection {
 	}
 
 	protected Connection(Properties popts, MsgHandler handler) throws IOException, InterruptedException {
-		id = numConnections++;
+		id = Integer.toString(numConnections++);
 		self = this;
 		msgProc = new MsgProcessor();
 		processor = new Thread(msgProc, "NATS_Processor-" + id);
@@ -202,14 +142,16 @@ public class Connection {
 		status = AWAITING_CONTROL;
 		subs = new ConcurrentHashMap<Integer, Subscription>();
 		pongs = new ConcurrentLinkedQueue<MsgHandler>();
+		nUtil = new NatsUtil();
 
 		opts = popts;
-		configServers();
+		Server.addServers(opts);
 		timer = new Timer("NATS_Timer-" + id);
-		current = 0;
 
-		if (!connect())
-			throw new IOException("Failed connecting to " + servers[current].host + ":" + servers[current].port);
+		if (!connect()) {
+			Server server = Server.current();
+			throw new IOException("Failed connecting to " + server.getHost() + ":" + server.getPort());
+		}
 		
 		if (handler != null)
 			connectHandler = handler;
@@ -218,54 +160,26 @@ public class Connection {
 		sendConnectCommand();
 	}
 	
-	private void configServers() {
-		String[] serverStrings = null;
-		if (opts.containsKey("uris")) 
-			serverStrings = ((String)opts.get("uris")).split(",");
-		else if (opts.containsKey("servers")) 
-			serverStrings = ((String)opts.get("servers")).split(",");
-		else if (opts.containsKey("uri"))
-			serverStrings = ((String)opts.get("uri")).split(",");
-
-		servers = new Server[serverStrings.length];
-		Random rand = (((Boolean)opts.get("dont_randomize_servers")) == Boolean.TRUE ? null : new Random());
-		String[] uri;
-		for(int i = 0; i < serverStrings.length; i++) {
-			int idx = i;
-			for(;rand != null;) {
-				idx = rand.nextInt(servers.length);
-				if (servers[idx] == null) break;
-			}
-			uri = serverStrings[i].split(":");
-			servers[idx] = new Server();
-			if (serverStrings[i].contains("@")) {
-				servers[idx].user = uri[1].substring(2, uri[1].length());
-				servers[idx].pass = uri[2].split("@")[0];				
-				servers[idx].host = uri[2].split("@")[1];
-				servers[idx].port = Integer.parseInt(uri[3]);
-			}
-			else {
-				servers[idx].user = null;
-				servers[idx].pass = null;
-				servers[idx].host = uri[1].substring(2, uri[1].length());
-				servers[idx].port = Integer.parseInt(uri[2]);
-			}
-		}
+	@Override
+	public String getResourceId() {
+		return id;
 	}
 	
 	private boolean connect() {
 		try {
-			InetSocketAddress addr = new InetSocketAddress(servers[current].host, servers[current].port);
+			Server server = Server.current();
+			InetSocketAddress addr = new InetSocketAddress(server.getHost(), server.getPort());
 			channel = SocketChannel.open(addr);
 			while(!channel.isConnected()){}			
-			servers[current].connected = true;
+			server.setConnected(true);
 			connStatus = OPEN;
 			conns.put(this.toString(), this);
-			// Activating pinger if not running
-			if (pinger == null) {
-				pinger = new Pinger();
-				pinger.start();			
+			// Activating monitor if not running
+			if (monitor == null) {
+				monitor = NatsMonitor.getInstance();
+				monitor.start();
 			}
+			monitor.addResource(id, this);
 		} catch(Exception ie) {
 			return false;
 		}
@@ -284,7 +198,7 @@ public class Connection {
 	public String createInbox()
 	{
 		Random rand = new Random();
-		return "_INBOX." + hexRand(0x0010000, rand) 
+		return "_INBOX_" + hexRand(0x0010000, rand) 
 				+ hexRand(0x0010000, rand)
 				+ hexRand(0x0010000, rand)
 				+ hexRand(0x0010000, rand)
@@ -293,6 +207,7 @@ public class Connection {
 	}
 
 	private void sendConnectCommand() throws IOException {
+		Server server = Server.current();
 		String user = null;
 		String pass = null;
 		StringBuffer sb = new StringBuffer("CONNECT {\"verbose\":");
@@ -302,9 +217,9 @@ public class Connection {
 			user = (String)opts.getProperty("user");
 			pass = (String)opts.getProperty("pass");
 		}
-		if (servers[current].user != null) {
-			user = servers[current].user;
-			pass = servers[current].pass;			
+		if (server.getUser() != null) {
+			user = server.getUser();
+			pass = server.getPass();			
 		}
 
 		if (user != null) sb.append(",\"user\":\"").append(user).append("\"");
@@ -337,8 +252,8 @@ public class Connection {
 		conns.remove(this.toString());
 		// Deactivating pinger if no connection is available.
 		if (conns.size() == 0) {
-			pinger.interrupt();
-			pinger = null;
+			monitor.interrupt();
+			monitor = null;
 		}
 		timer.cancel();
 	}
@@ -469,7 +384,7 @@ public class Connection {
 		Subscription sub = new Subscription(sid, subject, handler);
 
 		if (popts != null) {
-			sub.queue = (popts.getProperty("queue") == null ? " " : (String)popts.getProperty("queue"));
+			sub.queue = (String)popts.getProperty("queue");
 			sub.max = (popts.getProperty("max") == null ? -1 : Integer.parseInt(popts.getProperty("max")));
 		}
 
@@ -480,7 +395,7 @@ public class Connection {
 	}
 
 	private void sendSubscription(String subject, Integer sid, Subscription sub) throws IOException {
-		sendCommand("SUB " + subject + SPC + sub.queue + SPC + sid.toString() + CR_LF);
+		sendCommand("SUB " + subject + SPC + (sub.queue == null ? "" : sub.queue + SPC) + sid.toString() + CR_LF);
 
 		if (sub.max != -1) this.unsubscribe(sid, sub.max);
 	}
@@ -531,60 +446,64 @@ public class Connection {
 		sendCommand(command.getBytes(), command.length(), false);
 	}
     
-	private void sendCommand(byte[] data, int length, boolean priority) throws IOException {
-		for(;;) {
+	private synchronized void sendCommand(byte[] data, int length, boolean priority) throws IOException {
+		while (true) {
 			try {
-				synchronized(sendBuffer) {
-					sendBuffer.put(data, 0, length);
-					if (sendBuffer.position() <= length) {
-						// Flushing very first message
-						timer.schedule(new TimerTask() {
-							public void run() {
-								try {
-									flushPending();
-								} catch (IOException e) {
-									LOG.error(e.getMessage());
-								}
+				sendBuffer.put(data, 0, length);
+				if (sendBuffer.position() <= length) {
+					// Flushing very first message
+					timer.schedule(new TimerTask() {
+						public void run() {
+							try {
+								flushPending();
+							} catch (IOException e) {
+								LOG.error(e.getMessage() + ", Failed flushing messages");
 							}
-						}, 1);
-						return;
-					}
-					if (priority || (sendBuffer.position() > MAX_PENDING_SIZE)) flushPending();
+						}
+					}, 1);
+					return;
 				}
+				if (priority || (sendBuffer.position() > MAX_PENDING_SIZE)) { flushPending(); }
 				break;
 			} catch(BufferOverflowException bofe) {
 				flushPending();
 				// Reallocating send buffer if bufferoverflow occurs too frequently
 				if (sendBuffer.capacity() < MAX_BUFFER_SIZE) {
-					if ((System.currentTimeMillis() - lastOverflow) < REALLOCATION_THRESHOLD)
-						sendBuffer = ByteBuffer.allocateDirect(sendBuffer.capacity()*2);
+					if ((System.currentTimeMillis() - lastOverflow) < REALLOCATION_THRESHOLD) {
+						LOG.debug("Expanding sendBuffer from " + sendBuffer.capacity() + " to " + sendBuffer.capacity()*2);
+						LOG.debug("Copying " + sendBuffer.limit() + " bytes");
+						sendBuffer = nUtil.expandBuffer(sendBuffer);
+					}
 					lastOverflow = System.currentTimeMillis();
 				}
 			}
 		}		
 	}
 	
-	private void flushPending() throws IOException {
-		synchronized(sendBuffer) {
-			if ((lastPos = sendBuffer.position()) > 0) {
-				try {
-					sendBuffer.flip();
-					for(;;) {
-						if (sendBuffer.position() >= sendBuffer.limit()) break;
-						channel.write(sendBuffer);
-					}		
-					sendBuffer.clear();
-				} catch (IOException ie) {
-					if (connStatus == OPEN) {
-						connStatus = RECONNECT;
-						reconnect();
-					}
+	private synchronized void flushPending() throws IOException {
+		if ((lastPos = sendBuffer.position()) > 0) {
+			try {
+				sendBuffer.flip();
+				for(;;) {
+					if (sendBuffer.position() == sendBuffer.limit()) break;
+					channel.write(sendBuffer);
+				}
+				sendBuffer.clear();
+			} catch (IOException ie) {
+				if (connStatus == OPEN) {
+					connStatus = RECONNECT;
+					reconnect();
 				}
 			}
 		}
 	}
 	
-	private void sendPing(MsgHandler handler) throws IOException {
+	/**
+	 * Ping a server and invoke a handler when PONG is returned.
+	 * @param handler
+	 * @throws IOException
+	 */
+	public void sendPing(MsgHandler handler) throws IOException {
 		synchronized(pongs) {
 			pongs.add(handler);
 		}
@@ -633,10 +552,9 @@ public class Connection {
     	
 		String inbox = createInbox();
 		Integer sub = subscribe(inbox, popts, handler);
-		if (msg != null)
-		publish(subject, inbox, msg, null);
+		if (msg != null) { publish(subject, inbox, msg, null); }
 		
-		return sub;		
+		return sub;
 	}
     
 	/**
@@ -690,9 +608,9 @@ public class Connection {
 		TimerTask task = new TimerTask() {
 			public void run() {
 				try {
-					if (auto_unsubscribe) parent.unsubscribe(sid);
+					if (auto_unsubscribe) { parent.unsubscribe(sid); }
 				} catch(IOException e) {
-					LOG.error(e.getMessage());;
+					LOG.error(e.getMessage() + ", TimerTask failed unsubscribing " + sid);
 				}
 				
 				if (handler != null) handler.execute(sid);
@@ -713,47 +631,44 @@ public class Connection {
 			if ((lastPos = sendBuffer.position()) > 0) {
 				unsent = new byte[lastPos]; 
 				try {
+					sendBuffer.flip();
 					sendBuffer.get(unsent, 0, lastPos);
 				} catch(BufferUnderflowException e) {
-					LOG.info(e.getMessage());
+					LOG.error(e.getMessage() + ", Failed reading unsent messages from sendBuffer");
 				}
 				sendBuffer.clear();
 				lastPos = 0;
 			}
 
 			conns.remove(this.toString());
-			outer:
-				for(; current < servers.length; current++) {
-					for(; servers[current].reconnect_attempts < max_reconnect_attempts; servers[current].reconnect_attempts++) {
-						try {
-							channel.close();
-							connect();
+			for(int i = 0; i < max_reconnect_attempts; i++) {
+				try {
+					channel.close();
+					connect();
 
-							if (isConnected()) {
-								receiveBuffer.clear();
-								status = AWAITING_CONTROL;
-								sendConnectCommand();
-								sendSubscriptions();
-								if (unsent != null)
-									sendCommand(unsent, unsent.length, false);
-								flushPending();
-								connStatus = OPEN;
-								servers[current].reconnect_attempts = 0;
-								break outer;
-							}	
-							Thread.sleep(reconnect_time_wait);
-						} catch(IOException ie) {
-							LOG.warn(ie.getMessage());
-							continue;
-						} catch (InterruptedException e) {
-							LOG.warn(e.getMessage());
-						}
-					}
+					if (isConnected()) {
+						receiveBuffer.clear();
+						status = AWAITING_CONTROL;
+						sendConnectCommand();
+						sendSubscriptions();
+						if (unsent != null) { sendCommand(unsent, unsent.length, false); }
+						flushPending();
+						connStatus = OPEN;
+						break;
+					}	
+					Thread.sleep(reconnect_time_wait);
+					Server.next();
+				} catch(IOException ie) {
+					Server server = Server.current();
+					LOG.warn(ie.getMessage() + ", Failed connecting to " + server.getHost() + ":" + server.getPort());
+					continue;
+				} catch (InterruptedException e) {
+					LOG.error(e.getMessage() + ", Reconnecting process is interruped");
 				}
+			}
 
 			// Failing reconnection to all servers
-			if (connStatus == RECONNECT) 
-				throw new IOException("Failed connecting to all servers");
+			if (connStatus == RECONNECT) { throw new IOException("Failed connecting to all servers"); }
 		}
 		processor = new Thread(msgProc, "NATS_Processor-" + id);
 		processor.setDaemon(true);
@@ -770,7 +685,7 @@ public class Connection {
 			try {
 				reconnect();
 			} catch (IOException e) {
-				LOG.error(e.getMessage());
+				LOG.error(e.getMessage() + ", Reconnecting process has failed");
 			}
 		}
 	}
@@ -779,15 +694,15 @@ public class Connection {
 	 * Internal data structure to hold subscription meta data
 	 * @author Teppei Yagihashi
 	 */
-	private class Subscription {
-		public Integer sid = null;
-		public String subject = null;
-		public MsgHandler handler = null;
-		public String queue = "";
-		public int max = -1;
-		public int received = 0;
-		public int expected = -1;
-		public TimerTask task = null;
+	public class Subscription {
+		private Integer sid = null;
+		private String subject = null;
+		private MsgHandler handler = null;
+		private String queue = null;
+		private int max = -1;
+		private int received = 0;
+		private int expected = -1;
+		private TimerTask task = null;
     	
 		public Subscription(Integer psid, String psubject, MsgHandler phandler) {
 			sid = psid;
@@ -795,13 +710,12 @@ public class Connection {
 			handler = phandler;
 		}
 	}
-    
+	
 	/**
 	 * Main thread for processing incoming and outgoing messages
 	 * @author Teppei Yagihashi
 	 */
 	private final class MsgProcessor implements Runnable {
-		private byte[] buf = new byte[INIT_BUFFER_SIZE];
 		private int pos;
 		private String subject;
 		private String optReply;
@@ -812,8 +726,6 @@ public class Connection {
 		private boolean reallocate;
 
 		public MsgProcessor() {
-			for(int l = 0; l < INIT_BUFFER_SIZE; l++)
-				buf[l] = '\0';		
 			pos = 0;
 			payload_length = -1;
 			reallocate = false;
@@ -843,52 +755,54 @@ public class Connection {
 		 */
 		private void processMessage() throws IOException, InterruptedException {
 			if (channel.read(receiveBuffer) > 0) {
-				int diff = 0;
 				receiveBuffer.flip();
-				for(;;) {
-					if (receiveBuffer.position() >= receiveBuffer.limit())
-						break;
+				while (true) {
+					if (receiveBuffer.position() >= receiveBuffer.limit()) { break; }
+					
 					switch(status) {
 					case AWAITING_CONTROL :
-						if ((pos = readNextOp(receiveBuffer)) == 0) {
-							if (comp(buf, MSG, 3)) {
+						if ((pos = nUtil.readNextOp(pos, receiveBuffer)) == 0) {
+							if (nUtil.compare(MSG, 3)) {
 								status = AWAITING_MSG_PAYLOAD;
 								parseMsg();
 								if (receiveBuffer.limit() < (payload_length + receiveBuffer.position() + 2)) {
-									diff = receiveBuffer.limit() - receiveBuffer.position();
 									// Don't clear() yet and keep it in buffer
 									receiveBuffer.compact();
-									receiveBuffer.position(diff);
 									reallocate = verifyTruncation();
 									return;									
 								}
 								break;
 							}
-							else if (comp(buf, PONG, 4)) {
+							else if (nUtil.compare(PONG, 4)) {
 								MsgHandler handler;
-								synchronized(pongs) {
-									handler = pongs.poll();
+								synchronized(pongs) { 
+									handler = pongs.poll(); 
 								}
 								processEvent(handler);
-								if (handler.caller != null)
-									handler.caller.interrupt();
+								if (handler.caller != null) { 
+									handler.caller.interrupt(); 
+								}
 							}
-							else if (comp(buf, PING, 4)) sendCommand(PONG_RESPONSE, PONG_RESPONSE_LEN, true);
-							else if (comp(buf, ERR, 4)) {
+							else if (nUtil.compare(PING, 4)) { sendCommand(PONG_RESPONSE, PONG_RESPONSE_LEN, false); }
+							else if (nUtil.compare(ERR, 4)) {
 								if (connStatus == OPEN) {
 									connStatus = RECONNECT;
 									timer.schedule(new ReconnectTask(), 1);
 								}
 							}
-							else if (comp(buf, OK, 3)) {/* do nothing for now */}
-							else if (comp(buf, INFO, 4)) if (connectHandler != null) connectHandler.execute((Object)self);
+							else if (nUtil.compare(OK, 3)) {/* do nothing for now */}
+							else if (nUtil.compare(INFO, 4)) {
+								Server.current().parseServerInfo(nUtil.getOp());
+								if (connectHandler != null) { connectHandler.execute((Object)self); }
+							}
 						}
+						else { lastTruncated = System.currentTimeMillis(); }
+						
 						break;
 					case AWAITING_MSG_PAYLOAD :
-						receiveBuffer.get(buf, 0, payload_length + 2);
+						receiveBuffer.get(nUtil.getBuffer(), 0, payload_length + 2);
 						on_msg(); 
-						pos = 0;
-						status = AWAITING_CONTROL;					
+						status = AWAITING_CONTROL;
 						break;
 					}
 				}
@@ -896,7 +810,7 @@ public class Connection {
 				
 				// Reallocation occurs only when receiveBuffer is empty.
 				if (reallocate) {
-					receiveBuffer = ByteBuffer.allocateDirect(receiveBuffer.capacity()*2);
+					receiveBuffer = ByteBuffer.allocateDirect(receiveBuffer.capacity() * 2);
 					reallocate = false;
 				}
 			}
@@ -915,28 +829,30 @@ public class Connection {
 		}
 		
 		private void on_msg() throws IOException {
-			sub.received++;
-			if (sub.max != -1) {
-				if (sub.max < sub.received)
-					return;
-				else if (sub.max == sub.received) 
-					subs.remove(sub.sid);
-			}
-			processEvent(sub.handler);
-			
-			if ((sub.task != null) && (sub.received >= sub.expected)) {
-				sub.task.cancel();
-				sub.task = null;
+			if (sub != null) {
+				sub.received++;
+				if (sub.max != -1) {
+					if (sub.max < sub.received)
+						return;
+					else if (sub.max == sub.received) 
+						subs.remove(sub.sid);
+				}
+				processEvent(sub.handler);
+
+				if ((sub.task != null) && (sub.received >= sub.expected)) {
+					sub.task.cancel();
+					sub.task = null;
+				}
 			}
 		}
 		
 		private String getString() {
-			return new String(buf, 0, payload_length);
+			return new String(nUtil.getBuffer(), 0, payload_length);
 		}
 		
 		private byte[] getByteArray() {
 			byte[] arr = new byte[payload_length];
-			System.arraycopy(buf, 0, arr, 0, payload_length);
+			System.arraycopy(nUtil.getBuffer(), 0, arr, 0, payload_length);
 
 			return arr;
 		}
@@ -976,28 +892,10 @@ public class Connection {
 			}
 		}
 		
-		private int readNextOp(ByteBuffer buffer) {
-			int i = pos, limit = buffer.limit();
-			
-			for(; buffer.position() < limit; i++) {
-				buf[i] = buffer.get();
-				if ((i > 0) && (buf[i] == '\n') && (buf[i-1] == '\r')) 
-					return 0;
-			}
-			lastTruncated = System.currentTimeMillis();
-			return i;
-		}
-		
-		private boolean comp(byte[] src, byte[] dest, int length) {
-			for(int i = 0; i < length; i++)
-				if (src[i] != dest[i])
-					return false;
-			return true;
-		}
-
 		// Extracting MSG parameters
 		private void parseMsg() {
 			int index = 0, rid = 0, start = 0;
+			byte[] buf = nUtil.getBuffer();
 			for( ; buf[index++] != 0xd; ) {
 				if (buf[index] == 0x20) {
 					if (rid == 1)
@@ -1012,7 +910,5 @@ public class Connection {
 			}
 			payload_length = Integer.parseInt(new String(buf,start,--index-start));
 		}		
-		
-	}    
-	
+	}
 }

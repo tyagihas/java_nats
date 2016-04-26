@@ -20,9 +20,11 @@ public class AutoUnsub {
 				System.out.println("Received update : " + msg);
 			}
 		});
+		conn.flush();
 		
 		for(int i = 0; i < 10; i++)
 			conn.publish(args[0], Integer.toString(i));
+		conn.flush();
 		
 		System.out.println("\nPress enter to exit.");
 		bufferedReader.readLine();

@@ -30,10 +30,10 @@ public class PubSubPerf {
 					double elapsed = System.nanoTime() - start;
 					System.out.println();
 					System.out.println("\nelapsed : " + Double.toString(elapsed / 1000000000) + " seconds");
-					System.out.println("msg/sec : " + Double.toString(loop / (elapsed / 1000000000)));						
+					System.out.println("msg/sec : " + Double.toString(loop / (elapsed / 1000000000)));		
 					main.interrupt();
 				}
-			}
+			}			
 		});		
 		conn1.flush();
 		
