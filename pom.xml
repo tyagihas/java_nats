@@ -5,7 +5,7 @@
 	<groupId>com.github.tyagihas</groupId>
 	<artifactId>java_nats</artifactId>
 	<packaging>jar</packaging>
-	<version>0.6.0</version>
+	<version>0.6.1</version>
 	<name>Java Nats Client</name>
 	<description>Java client for Nats</description>
 	<url>https://github.com/tyagihas/java_nats.git</url>
@@ -70,7 +70,7 @@
 				<version>2.9.1</version>
 				<configuration>
 					<sourcepath>${project.basedir}/src/main/java</sourcepath>
-					<excludePackageNames>org.nats.common:org.nats.server.ClientConnection:org.nats.server.Subscription:org.nats.examples:org.nats.benchmark</excludePackageNames>
+					<excludePackageNames>org.nats.common:org.nats.Server:org.nats.server.ClientConnection:org.nats.server.Subscription:org.nats.examples:org.nats.benchmark</excludePackageNames>
 					<reportOutputDirectory>${project.basedir}</reportOutputDirectory>
           			<destDir>doc</destDir>
           		</configuration>

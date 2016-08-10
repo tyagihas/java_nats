@@ -60,6 +60,7 @@ public class Connection implements NatsMonitor.Resource {
     
 	private Connection self;
 	private MsgHandler connectHandler;
+	private MsgHandler disconnectHandler;
 	private String id;
 	private MsgProcessor msgProc;
 	private Thread processor;
@@ -88,7 +89,7 @@ public class Connection implements NatsMonitor.Resource {
 	}	
 	
 	/** 
-	 * Create and return a Connection with various attributes. 
+	 * Create and return a Connection with various attributes.
 	 * @param popts Properties object containing connection attributes
 	 * @return newly created Connection object
 	 */
@@ -97,14 +98,27 @@ public class Connection implements NatsMonitor.Resource {
 	}
 	
 	/** 
-	 * Create and return a Connection with various attributes. 
+	 * Create and return a Connection with various attributes. connectHandler is invoked when connected to a server.
 	 * @param popts Properties object containing connection attributes
-	 * @param handler MsgHandler to be invoked when connection is established
+	 * @param connectHandler MsgHandler to be invoked when connection is established
 	 * @return newly created Connection object
 	 */
-	public static Connection connect(Properties popts, MsgHandler handler) throws IOException, InterruptedException {
+	public static Connection connect(Properties popts, MsgHandler connectHandler) throws IOException, InterruptedException {
 		init(popts);
-		return new Connection(popts, handler);
+		return Connection.connect(popts, connectHandler, null);
+	}
+
+	/** 
+	 * Create and return a Connection with various attributes.
+	 * connectHandler is invoked when connected to a server and disconnectHandler is invoked when disconnected.
+	 * @param popts Properties object containing connection attributes
+	 * @param connectHandler MsgHandler to be invoked when connection is established
+	 * @param disconnectHandler MsgHandler to be invoked when connection is disconnected and unable to reach any server
+	 * @return newly created Connection object
+	 */
+	public static Connection connect(Properties popts, MsgHandler connectHandler, MsgHandler disconnectHandler) throws IOException, InterruptedException {
+		init(popts);
+		return new Connection(popts, connectHandler, disconnectHandler);
 	}
 	
 	protected static void init(Properties popts) {
@@ -131,7 +145,7 @@ public class Connection implements NatsMonitor.Resource {
 		if (System.getenv("NATS_DONT_RANDOMIZE_SERVERS") != null) popts.put("dont_randomize_servers", Boolean.parseBoolean(System.getenv("NATS_DONT_RANDOMIZE_SERVERS")));
 	}
 
-	protected Connection(Properties popts, MsgHandler handler) throws IOException, InterruptedException {
+	protected Connection(Properties popts, MsgHandler connectHandler, MsgHandler disconnectHandler) throws IOException, InterruptedException {
 		id = Integer.toString(numConnections++);
 		self = this;
 		msgProc = new MsgProcessor();
@@ -153,8 +167,9 @@ public class Connection implements NatsMonitor.Resource {
 			throw new IOException("Failed connecting to " + server.getHost() + ":" + server.getPort());
 		}
 		
-		if (handler != null)
-			connectHandler = handler;
+		if (connectHandler != null) { this.connectHandler = connectHandler; }
+		if (disconnectHandler != null) { this.disconnectHandler = disconnectHandler; }
+
 		processor.setDaemon(true);
 		processor.start();
 		sendConnectCommand();
@@ -447,6 +462,10 @@ public class Connection implements NatsMonitor.Resource {
 	}
     
 	private synchronized void sendCommand(byte[] data, int length, boolean priority) throws IOException {
+		if ((connStatus != OPEN) || !isConnected()) {
+			throw new IOException("Connection is disconnected");
+		}
+
 		while (true) {
 			try {
 				sendBuffer.put(data, 0, length);
@@ -668,7 +687,10 @@ public class Connection implements NatsMonitor.Resource {
 			}
 
 			// Failing reconnection to all servers
-			if (connStatus == RECONNECT) { throw new IOException("Failed connecting to all servers"); }
+			if (connStatus == RECONNECT) {
+				if (disconnectHandler != null) { disconnectHandler.execute(); }
+				throw new IOException("Failed connecting to all servers");
+			}
 		}
 		processor = new Thread(msgProc, "NATS_Processor-" + id);
 		processor.setDaemon(true);
