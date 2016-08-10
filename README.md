@@ -16,7 +16,7 @@ Add dependency to Maven pom.xml
 <dependency>
 	<groupId>com.github.tyagihas</groupId>
 	<artifactId>java_nats</artifactId>
-	<version>0.6.0</version>
+	<version>0.6.1</version>
 </dependency>
 ```
 
