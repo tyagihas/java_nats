@@ -688,7 +688,7 @@ public class Connection implements NatsMonitor.Resource {
 
 			// Failing reconnection to all servers
 			if (connStatus == RECONNECT) {
-				if (disconnectHandler != null) { disconnectHandler.execute(); }
+				if (disconnectHandler != null) { disconnectHandler.execute((Object)self); }
 				throw new IOException("Failed connecting to all servers");
 			}
 		}
