@@ -49,7 +49,6 @@ import org.slf4j.LoggerFactory;
  * @author Teppei Yagihashi
  */
 public class Connection implements NatsMonitor.Resource {
-
 	private Logger LOG = LoggerFactory.getLogger(Connection.class);
 	
 	private static int numConnections;
@@ -81,6 +80,9 @@ public class Connection implements NatsMonitor.Resource {
 	private long lastOverflow;
 
 	private volatile int connStatus;
+	private boolean secure;
+	private Thread caller;
+
 	
 	static {
 		ssid = 1;
@@ -104,7 +106,6 @@ public class Connection implements NatsMonitor.Resource {
 	 * @return newly created Connection object
 	 */
 	public static Connection connect(Properties popts, MsgHandler connectHandler) throws IOException, InterruptedException {
-		init(popts);
 		return Connection.connect(popts, connectHandler, null);
 	}
 
@@ -121,16 +122,20 @@ public class Connection implements NatsMonitor.Resource {
 		return new Connection(popts, connectHandler, disconnectHandler);
 	}
 	
-	protected static void init(Properties popts) {
+	private static void init(Properties popts) {
 		// Defaults
 		if (!popts.containsKey("verbose")) popts.put("verbose", Boolean.FALSE);
 		if (!popts.containsKey("pedantic")) popts.put("pedantic", Boolean.FALSE);
 		if (!popts.containsKey("reconnect")) popts.put("reconnect", Boolean.TRUE);
-		if (!popts.containsKey("ssl")) popts.put("ssl", new Boolean(false));
 		if (!popts.containsKey("max_reconnect_attempts")) popts.put("max_reconnect_attempts", new Integer(DEFAULT_MAX_RECONNECT_ATTEMPTS));
 		if (!popts.containsKey("reconnect_time_wait")) popts.put("reconnect_time_wait", new Integer(DEFAULT_RECONNECT_TIME_WAIT));
 		if (!popts.containsKey("ping_interval")) popts.put("ping_interval", new Integer(DEFAULT_PING_INTERVAL));
 		if (!popts.containsKey("dont_randomize_servers")) popts.put("dont_randomize_servers", Boolean.FALSE);
+
+		if (!popts.containsKey("keystore")) popts.put("keystore", DEFAULT_KEYSTORE);
+		if (!popts.containsKey("keystore_pass")) popts.put("keystore_pass", DEFAULT_PASSWORD);
+		if (!popts.containsKey("truststore")) popts.put("truststore", DEFAULT_TRUSTSTORE);
+		if (!popts.containsKey("truststore_pass")) popts.put("truststore_pass", DEFAULT_PASSWORD);
 
 		// Overriding with ENV
 		if (System.getenv("NATS_URI") != null) popts.put("uri", System.getenv("NATS_URI")); else if (!popts.containsKey("uri")) popts.put("uri", DEFAULT_URI);
@@ -138,18 +143,21 @@ public class Connection implements NatsMonitor.Resource {
 		if (System.getenv("NATS_VERBOSE") != null) popts.put("verbose", new Boolean(System.getenv("NATS_VERBOSE")));
 		if (System.getenv("NATS_PEDANTIC") != null) popts.put("pedantic", new Boolean(System.getenv("NATS_PEDANTIC")));
 		if (System.getenv("NATS_RECONNECT") != null) popts.put("reconnect", new Boolean(System.getenv("NATS_RECONNECT")));
-		if (System.getenv("NATS_SSL") != null) popts.put("ssl", new Boolean(System.getenv("NATS_SSL")));
 		if (System.getenv("NATS_MAX_RECONNECT_ATTEMPTS") != null) popts.put("max_reconnect_attempts", Integer.parseInt(System.getenv("NATS_MAX_RECONNECT_ATTEMPTS")));
 		if (System.getenv("NATS_MAX_RECONNECT_TIME_WAIT") != null) popts.put("max_reconnect_time_wait", Integer.parseInt(System.getenv("NATS_MAX_RECONNECT_TIME_WAIT")));	
 		if (System.getenv("NATS_PING_INTERVAL") != null) popts.put("ping_interval", Integer.parseInt(System.getenv("NATS_PING_INTERVAL")));
 		if (System.getenv("NATS_DONT_RANDOMIZE_SERVERS") != null) popts.put("dont_randomize_servers", Boolean.parseBoolean(System.getenv("NATS_DONT_RANDOMIZE_SERVERS")));
+
+		if (System.getenv("NATS_TLS") != null) popts.put("tls", new Boolean(System.getenv("NATS_TLS")));
+		if (System.getenv("NATS_KEYSTORE") != null) popts.put("keystore", System.getenv("NATS_KEYSTORE"));
+		if (System.getenv("NATS_KEYSTORE_PASS") != null) popts.put("keystore_pass", System.getenv("NATS_KEYSTORE_PASS"));
+		if (System.getenv("NATS_TRUSTSTORE") != null) popts.put("truststore", System.getenv("NATS_TRUSTSTORE"));
+		if (System.getenv("NATS_TRUSTSTORE_PASS") != null) popts.put("truststore_pass", System.getenv("NATS_TRUSTSTORE_PASS"));
 	}
 
-	protected Connection(Properties popts, MsgHandler connectHandler, MsgHandler disconnectHandler) throws IOException, InterruptedException {
+	private Connection(Properties popts, MsgHandler connectHandler, MsgHandler disconnectHandler) throws IOException, InterruptedException {
 		id = Integer.toString(numConnections++);
 		self = this;
-		msgProc = new MsgProcessor();
-		processor = new Thread(msgProc, "NATS_Processor-" + id);
 		sendBuffer = ByteBuffer.allocateDirect(INIT_BUFFER_SIZE);
 		lastPos = 0;
 		receiveBuffer = ByteBuffer.allocateDirect(INIT_BUFFER_SIZE);
@@ -157,6 +165,7 @@ public class Connection implements NatsMonitor.Resource {
 		subs = new ConcurrentHashMap<Integer, Subscription>();
 		pongs = new ConcurrentLinkedQueue<MsgHandler>();
 		nUtil = new NatsUtil();
+		secure = false;
 
 		opts = popts;
 		Server.addServers(opts);
@@ -170,8 +179,17 @@ public class Connection implements NatsMonitor.Resource {
 		if (connectHandler != null) { this.connectHandler = connectHandler; }
 		if (disconnectHandler != null) { this.disconnectHandler = disconnectHandler; }
 
+		processor = new Thread(msgProc, "NATS_Processor-" + id);
 		processor.setDaemon(true);
 		processor.start();
+
+		try {
+			caller = Thread.currentThread();
+			caller.join();
+		} catch(InterruptedException ie) {
+			LOG.debug("INFO message is processed");
+		}
+
 		sendConnectCommand();
 	}
 	
@@ -184,20 +202,25 @@ public class Connection implements NatsMonitor.Resource {
 		try {
 			Server server = Server.current();
 			InetSocketAddress addr = new InetSocketAddress(server.getHost(), server.getPort());
+
 			channel = SocketChannel.open(addr);
 			while(!channel.isConnected()){}			
 			server.setConnected(true);
 			connStatus = OPEN;
 			conns.put(this.toString(), this);
+
 			// Activating monitor if not running
 			if (monitor == null) {
 				monitor = NatsMonitor.getInstance();
 				monitor.start();
 			}
 			monitor.addResource(id, this);
-		} catch(Exception ie) {
+		} catch(Exception e) {
+			LOG.error(e.getMessage());
+			e.printStackTrace();
 			return false;
 		}
+		msgProc = new MsgProcessor();
 
 		return true;
 	}
@@ -237,6 +260,13 @@ public class Connection implements NatsMonitor.Resource {
 			pass = server.getPass();			
 		}
 
+		sb.append(",\"tls_required\":\"");
+		if (secure) {
+			sb.append("true\"");
+		}
+		else {
+			sb.append("false\"");
+		}
 		if (user != null) sb.append(",\"user\":\"").append(user).append("\"");
 		if (pass != null) sb.append(",\"pass\":\"").append(pass).append("\"");
 		sb.append("}").append(CR_LF);
@@ -259,10 +289,14 @@ public class Connection implements NatsMonitor.Resource {
 	 * @throws IOException
 	 */
 	public void close(boolean flush) throws IOException {
+		LOG.debug("start closing");
 		if (flush)
 			flush();
 		connStatus = CLOSE;
 		processor.interrupt();
+		if (secure) {
+			((SecureSocketChannel)channel).terminate();
+		}
 		channel.close();
 		conns.remove(this.toString());
 		// Deactivating pinger if no connection is available.
@@ -271,6 +305,8 @@ public class Connection implements NatsMonitor.Resource {
 			monitor = null;
 		}
 		timer.cancel();
+
+		LOG.debug("end closing");
 	}
 
 	/**
@@ -756,7 +792,9 @@ public class Connection implements NatsMonitor.Resource {
 		public void run() {
 			for(;;) {
 				try {
-					processMessage();
+					if (channel.read(receiveBuffer) > 0) {
+						processMessage();
+					}
 				} catch(AsynchronousCloseException ace) {
 					continue;
 				} catch (InterruptedException ie) {
@@ -776,65 +814,75 @@ public class Connection implements NatsMonitor.Resource {
 		 * Parse and process various incoming messages
 		 */
 		private void processMessage() throws IOException, InterruptedException {
-			if (channel.read(receiveBuffer) > 0) {
-				receiveBuffer.flip();
-				while (true) {
-					if (receiveBuffer.position() >= receiveBuffer.limit()) { break; }
-					
-					switch(status) {
-					case AWAITING_CONTROL :
-						if ((pos = nUtil.readNextOp(pos, receiveBuffer)) == 0) {
-							if (nUtil.compare(MSG, 3)) {
-								status = AWAITING_MSG_PAYLOAD;
-								parseMsg();
-								if (receiveBuffer.limit() < (payload_length + receiveBuffer.position() + 2)) {
-									// Don't clear() yet and keep it in buffer
-									receiveBuffer.compact();
-									reallocate = verifyTruncation();
-									return;									
-								}
-								break;
+			receiveBuffer.flip();
+			while (true) {
+				if (receiveBuffer.position() >= receiveBuffer.limit()) { break; }
+
+				switch(status) {
+				case AWAITING_CONTROL :
+					if ((pos = nUtil.readNextOp(pos, receiveBuffer)) == 0) {
+						if (nUtil.compare(MSG, 3)) {
+							status = AWAITING_MSG_PAYLOAD;
+							parseMsg();
+							if (receiveBuffer.limit() < (payload_length + receiveBuffer.position() + 2)) {
+								// Don't clear() yet and keep it in buffer
+								receiveBuffer.compact();
+								reallocate = verifyTruncation();
+								return;
 							}
-							else if (nUtil.compare(PONG, 4)) {
-								MsgHandler handler;
-								synchronized(pongs) { 
-									handler = pongs.poll(); 
-								}
-								processEvent(handler);
-								if (handler.caller != null) { 
-									handler.caller.interrupt(); 
-								}
+							break;
+						}
+						else if (nUtil.compare(PONG, 4)) {
+							MsgHandler handler;
+							synchronized(pongs) {
+								handler = pongs.poll();
 							}
-							else if (nUtil.compare(PING, 4)) { sendCommand(PONG_RESPONSE, PONG_RESPONSE_LEN, false); }
-							else if (nUtil.compare(ERR, 4)) {
-								if (connStatus == OPEN) {
-									connStatus = RECONNECT;
-									timer.schedule(new ReconnectTask(), 1);
-								}
-							}
-							else if (nUtil.compare(OK, 3)) {/* do nothing for now */}
-							else if (nUtil.compare(INFO, 4)) {
-								Server.current().parseServerInfo(nUtil.getOp());
-								if (connectHandler != null) { connectHandler.execute((Object)self); }
+							processEvent(handler);
+							if (handler.caller != null) {
+								handler.caller.interrupt();
 							}
 						}
-						else { lastTruncated = System.currentTimeMillis(); }
-						
-						break;
-					case AWAITING_MSG_PAYLOAD :
-						receiveBuffer.get(nUtil.getBuffer(), 0, payload_length + 2);
-						on_msg(); 
-						status = AWAITING_CONTROL;
-						break;
+						else if (nUtil.compare(PING, 4)) {
+							sendCommand(PONG_RESPONSE, PONG_RESPONSE_LEN, false);
+						}
+						else if (nUtil.compare(ERR, 4)) {
+							if (connStatus == OPEN) {
+								connStatus = RECONNECT;
+								timer.schedule(new ReconnectTask(), 1);
+							}
+						}
+						else if (nUtil.compare(OK, 3)) { /* do nothing for now */ }
+						else if (nUtil.compare(INFO, 4)) {
+							Server svr = Server.current();
+							svr.parseServerInfo(nUtil.getOp());
+							if (svr.isTLS()) {
+								// Upgrading to a secure channel
+								secure = true;
+								opts.setProperty("tls_verify", svr.getServerInfo("tls_verify"));
+								channel = new SecureSocketChannel(channel, opts);
+							}
+							caller.interrupt();
+							if (connectHandler != null) {
+								connectHandler.execute((Object)self);
+							}
+						}
 					}
+					else { lastTruncated = System.currentTimeMillis(); }
+
+					break;
+				case AWAITING_MSG_PAYLOAD :
+					receiveBuffer.get(nUtil.getBuffer(), 0, payload_length + 2);
+					on_msg();
+					status = AWAITING_CONTROL;
+					break;
 				}
-				receiveBuffer.clear();
-				
-				// Reallocation occurs only when receiveBuffer is empty.
-				if (reallocate) {
-					receiveBuffer = ByteBuffer.allocateDirect(receiveBuffer.capacity() * 2);
-					reallocate = false;
-				}
+			}
+			receiveBuffer.clear();
+
+			// Reallocation occurs only when receiveBuffer is empty.
+			if (reallocate) {
+				receiveBuffer = ByteBuffer.allocateDirect(receiveBuffer.capacity() * 2);
+				reallocate = false;
 			}
 		}
 		
@@ -913,7 +961,7 @@ public class Connection implements NatsMonitor.Resource {
 				break;
 			}
 		}
-		
+
 		// Extracting MSG parameters
 		private void parseMsg() {
 			int index = 0, rid = 0, start = 0;
@@ -921,8 +969,8 @@ public class Connection implements NatsMonitor.Resource {
 			for( ; buf[index++] != 0xd; ) {
 				if (buf[index] == 0x20) {
 					if (rid == 1)
-						subject = new String(new String(buf,start,index-start));						
-					else if (rid == 2) 
+						subject = new String(new String(buf,start,index-start));
+					else if (rid == 2)
 						sub = subs.get(Integer.valueOf(new String(buf,start,index-start)));
 					else if (rid == 3)
 						optReply = new String(new String(buf,start,index-start));
@@ -931,6 +979,6 @@ public class Connection implements NatsMonitor.Resource {
 				}
 			}
 			payload_length = Integer.parseInt(new String(buf,start,--index-start));
-		}		
+		}
 	}
 }

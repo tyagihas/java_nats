@@ -2,3 +2,5 @@
 target
 .metadata
 bin/org
+keystore
+truststore

@@ -5,7 +5,6 @@ Java client library and server testing module for [NATS messaging system](http:/
 ## Supported Platforms
 
 java_nats currently supports following Java Platforms :
-- Java Platform, Standard Edition 7 (Java SE 7)
 - Java Platform, Standard Edition 8 (Java SE 8)
 
 ## Getting Started
@@ -16,7 +15,7 @@ Add dependency to Maven pom.xml
 <dependency>
 	<groupId>com.github.tyagihas</groupId>
 	<artifactId>java_nats</artifactId>
-	<version>0.6.1</version>
+	<version>0.7.0</version>
 </dependency>
 ```
 
@@ -197,7 +196,27 @@ Connection conn2 = Connection.connect(new Properties(), new MsgHandler() {
 });
 ```
 
-See examples and benchmarks for more information..
+## TLS
+
+* Use "keytool" to create TrustStore and KeyStore (if necessary) or specify existing ones in next step.
+
+* Set properties to configure TrustStore and KeyStore.
+
+```java
+Properties props = new Properties();
+props.put("truststore", "./truststore");
+props.put("truststore_pass", "password");
+// KeyStore is used only when tlsverify is set on the server.
+props.put("keystore", "./keystore");
+props.put("keystore_pass", "password");
+
+// Automatically detect if TLS is configured on the server.
+Connection conn = Connection.connect(props);
+```
+
+* It may be required to set TLS "timeout" parameter longer than default.
+
+See examples and benchmarks for more information.
 
 ## Nats Embedded Server (beta)
 
@@ -215,7 +234,7 @@ Start a Nats Embedded Server from command line. Assume CLASSPATH contains java_n
 ```
 
 Nats Embedded Server is intended for dev and unit testing and not for production use. Following features haven't been implemented in Nats Embedded Server.
-* SSL/TSL
+* TLS
 * Clustering
 
 ## License

@@ -25,7 +25,7 @@ IN THE SOFTWARE.
 package org.nats.common;
 
 public class Constants {
-	public static final String version = "0.6.1";
+	public static final String version = "0.7.0";
 	
 	public static final int DEFAULT_PORT = 4222;
 	public static final String DEFAULT_URI = "nats://localhost:" + Integer.toString(DEFAULT_PORT);
@@ -37,6 +37,13 @@ public class Constants {
 	public static final int OPEN = 0;
 	public static final int CLOSE = 1;
 	public static final int RECONNECT = 2;
+
+	// TLS parameters
+	public static final String DEFAULT_KEYSTORE = "./keystore";
+	public static final String DEFAULT_TRUSTSTORE = "./truststore";
+	public static final String DEFAULT_PASSWORD = "password";
+	public static final String TLS_REQUIRED = "tls_required";
+	public static final String TLS_VERSION = "TLSv1.2";
 
 	// Reconnect Parameters, 2 sec wait, 10 tries
 	public static final int DEFAULT_RECONNECT_TIME_WAIT = 2*1000;

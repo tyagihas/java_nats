@@ -107,7 +107,6 @@ public class NatsMonitor extends Thread {
 				Subscription.removeSubscribers(resource.getResourceId());
 				this.removeResource(resource.getResourceId());
 			} catch(InterruptedException ie) {
-				LOG.info(ie.getMessage());
 				break;
 			}
 		}
