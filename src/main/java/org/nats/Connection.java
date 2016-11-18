@@ -37,6 +37,8 @@ import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
+import javax.net.ssl.SSLException;
+
 import org.nats.common.NatsMonitor;
 import org.nats.common.NatsUtil;
 import org.slf4j.Logger;
@@ -790,7 +792,7 @@ public class Connection implements NatsMonitor.Resource {
 		}
 		
 		public void run() {
-			for(;;) {
+			while(true) {
 				try {
 					if (channel.read(receiveBuffer) > 0) {
 						processMessage();
@@ -798,7 +800,11 @@ public class Connection implements NatsMonitor.Resource {
 				} catch(AsynchronousCloseException ace) {
 					continue;
 				} catch (InterruptedException ie) {
+				  LOG.debug("MsgProcessor is interrupted.");
 					break;
+				} catch (SSLException se) {
+				  LOG.error(se.getMessage());
+				  break;
 				} catch (IOException e) {
 					// skipping if reconnect already starts due to -ERR code
 					if (connStatus == OPEN) {

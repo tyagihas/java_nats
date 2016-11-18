@@ -45,6 +45,7 @@ import javax.net.ssl.SSLEngineResult.HandshakeStatus;
 import static javax.net.ssl.SSLEngineResult.HandshakeStatus.FINISHED; 
 import static javax.net.ssl.SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING; 
 import javax.net.ssl.SSLEngineResult.Status;
+import javax.net.ssl.SSLException;
 import javax.net.ssl.SSLSession;
 import javax.net.ssl.TrustManagerFactory;
 
@@ -68,7 +69,7 @@ public class SecureSocketChannel extends SocketChannel {
   private ByteBuffer netIn;
   private final int appBufferSize;
 
-  public SecureSocketChannel(SocketChannel channel, Properties opts) throws IOException {
+  public SecureSocketChannel(SocketChannel channel, Properties opts) throws SSLException {
     super(SelectorProvider.provider());
 
     try {
@@ -110,8 +111,7 @@ public class SecureSocketChannel extends SocketChannel {
       this.startHandShake();
     } catch(Exception e) {
       sslContext = null;
-      e.printStackTrace();
-      throw new IOException("Failed establishing TLS connection due to " + e.getMessage());
+      throw new SSLException("Failed establishing TLS connection due to " + e.getMessage());
     }
   }
 
