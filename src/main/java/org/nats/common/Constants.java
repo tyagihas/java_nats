@@ -25,7 +25,7 @@ IN THE SOFTWARE.
 package org.nats.common;
 
 public class Constants {
-	public static final String version = "0.7.0";
+	public static final String version = "0.7.1";
 	
 	public static final int DEFAULT_PORT = 4222;
 	public static final String DEFAULT_URI = "nats://localhost:" + Integer.toString(DEFAULT_PORT);

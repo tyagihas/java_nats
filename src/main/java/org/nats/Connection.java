@@ -122,7 +122,7 @@ public class Connection implements NatsMonitor.Resource {
 		return new Connection(popts, connectHandler, disconnectHandler);
 	}
 	
-	private static void init(Properties popts) {
+	protected static void init(Properties popts) {
 		// Defaults
 		if (!popts.containsKey("verbose")) popts.put("verbose", Boolean.FALSE);
 		if (!popts.containsKey("pedantic")) popts.put("pedantic", Boolean.FALSE);
