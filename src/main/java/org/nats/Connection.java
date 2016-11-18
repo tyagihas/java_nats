@@ -155,7 +155,7 @@ public class Connection implements NatsMonitor.Resource {
 		if (System.getenv("NATS_TRUSTSTORE_PASS") != null) popts.put("truststore_pass", System.getenv("NATS_TRUSTSTORE_PASS"));
 	}
 
-	private Connection(Properties popts, MsgHandler connectHandler, MsgHandler disconnectHandler) throws IOException, InterruptedException {
+	protected Connection(Properties popts, MsgHandler connectHandler, MsgHandler disconnectHandler) throws IOException, InterruptedException {
 		id = Integer.toString(numConnections++);
 		self = this;
 		sendBuffer = ByteBuffer.allocateDirect(INIT_BUFFER_SIZE);
