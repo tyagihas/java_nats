@@ -1,7 +1,7 @@
 /**
 The MIT License (MIT)
 
-Copyright (c) 2012-2016 Teppei Yagihashi
+Copyright (c) 2012-2020 Teppei Yagihashi
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to
@@ -41,8 +41,9 @@ import javax.net.ssl.SSLException;
 
 import org.nats.common.NatsMonitor;
 import org.nats.common.NatsUtil;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Connection represents a bidirectional channel to NATS server. Message handler may be attached to each operation
@@ -51,7 +52,7 @@ import org.slf4j.LoggerFactory;
  * @author Teppei Yagihashi
  */
 public class Connection implements NatsMonitor.Resource {
-	private Logger LOG = LoggerFactory.getLogger(Connection.class);
+	private Logger LOG = Logger.getLogger(Connection.class.getName());
 	
 	private static int numConnections;
 	private static volatile int ssid;
@@ -189,7 +190,7 @@ public class Connection implements NatsMonitor.Resource {
 			caller = Thread.currentThread();
 			caller.join();
 		} catch(InterruptedException ie) {
-			LOG.debug("INFO message is processed");
+			LOG.log(Level.INFO, "INFO message is processed");
 		}
 
 		sendConnectCommand();
@@ -218,7 +219,7 @@ public class Connection implements NatsMonitor.Resource {
 			}
 			monitor.addResource(id, this);
 		} catch(Exception e) {
-			LOG.error(e.getMessage());
+			LOG.log(Level.SEVERE, e.getMessage());
 			e.printStackTrace();
 			return false;
 		}
@@ -262,12 +263,12 @@ public class Connection implements NatsMonitor.Resource {
 			pass = server.getPass();			
 		}
 
-		sb.append(",\"tls_required\":\"");
+		sb.append(",\"tls_required\":");
 		if (secure) {
-			sb.append("true\"");
+			sb.append("true");
 		}
 		else {
-			sb.append("false\"");
+			sb.append("false");
 		}
 		if (user != null) sb.append(",\"user\":\"").append(user).append("\"");
 		if (pass != null) sb.append(",\"pass\":\"").append(pass).append("\"");
@@ -291,7 +292,7 @@ public class Connection implements NatsMonitor.Resource {
 	 * @throws IOException
 	 */
 	public void close(boolean flush) throws IOException {
-		LOG.debug("start closing");
+		LOG.log(Level.ALL, "start closing");
 		if (flush)
 			flush();
 		connStatus = CLOSE;
@@ -308,7 +309,7 @@ public class Connection implements NatsMonitor.Resource {
 		}
 		timer.cancel();
 
-		LOG.debug("end closing");
+		LOG.log(Level.ALL, "end closing");
 	}
 
 	/**
@@ -514,7 +515,7 @@ public class Connection implements NatsMonitor.Resource {
 							try {
 								flushPending();
 							} catch (IOException e) {
-								LOG.error(e.getMessage() + ", Failed flushing messages");
+								LOG.log(Level.SEVERE, e.getMessage() + ", Failed flushing messages");
 							}
 						}
 					}, 1);
@@ -527,8 +528,8 @@ public class Connection implements NatsMonitor.Resource {
 				// Reallocating send buffer if bufferoverflow occurs too frequently
 				if (sendBuffer.capacity() < MAX_BUFFER_SIZE) {
 					if ((System.currentTimeMillis() - lastOverflow) < REALLOCATION_THRESHOLD) {
-						LOG.debug("Expanding sendBuffer from " + sendBuffer.capacity() + " to " + sendBuffer.capacity()*2);
-						LOG.debug("Copying " + sendBuffer.limit() + " bytes");
+						LOG.log(Level.ALL, "Expanding sendBuffer from " + sendBuffer.capacity() + " to " + sendBuffer.capacity()*2);
+						LOG.log(Level.ALL, "Copying " + sendBuffer.limit() + " bytes");
 						sendBuffer = nUtil.expandBuffer(sendBuffer);
 					}
 					lastOverflow = System.currentTimeMillis();
@@ -667,7 +668,7 @@ public class Connection implements NatsMonitor.Resource {
 				try {
 					if (auto_unsubscribe) { parent.unsubscribe(sid); }
 				} catch(IOException e) {
-					LOG.error(e.getMessage() + ", TimerTask failed unsubscribing " + sid);
+					LOG.log(Level.SEVERE, e.getMessage() + ", TimerTask failed unsubscribing " + sid);
 				}
 				
 				if (handler != null) handler.execute(sid);
@@ -691,7 +692,7 @@ public class Connection implements NatsMonitor.Resource {
 					sendBuffer.flip();
 					sendBuffer.get(unsent, 0, lastPos);
 				} catch(BufferUnderflowException e) {
-					LOG.error(e.getMessage() + ", Failed reading unsent messages from sendBuffer");
+					LOG.log(Level.SEVERE, e.getMessage() + ", Failed reading unsent messages from sendBuffer");
 				}
 				sendBuffer.clear();
 				lastPos = 0;
@@ -717,10 +718,10 @@ public class Connection implements NatsMonitor.Resource {
 					Server.next();
 				} catch(IOException ie) {
 					Server server = Server.current();
-					LOG.warn(ie.getMessage() + ", Failed connecting to " + server.getHost() + ":" + server.getPort());
+					LOG.log(Level.WARNING, ie.getMessage() + ", Failed connecting to " + server.getHost() + ":" + server.getPort());
 					continue;
 				} catch (InterruptedException e) {
-					LOG.error(e.getMessage() + ", Reconnecting process is interruped");
+					LOG.log(Level.WARNING,e.getMessage() + ", Reconnecting process is interruped");
 				}
 			}
 
@@ -736,7 +737,7 @@ public class Connection implements NatsMonitor.Resource {
 	}
 	
 	private class ReconnectTask extends TimerTask {
-		private final Logger LOG = LoggerFactory.getLogger(ReconnectTask.class);
+		private final Logger LOG = Logger.getLogger(ReconnectTask.class.getName());
 		
 		@Override
 		public void run() {
@@ -745,7 +746,7 @@ public class Connection implements NatsMonitor.Resource {
 			try {
 				reconnect();
 			} catch (IOException e) {
-				LOG.error(e.getMessage() + ", Reconnecting process has failed");
+				LOG.log(Level.WARNING, e.getMessage() + ", Reconnecting process has failed");
 			}
 		}
 	}
@@ -800,10 +801,10 @@ public class Connection implements NatsMonitor.Resource {
 				} catch(AsynchronousCloseException ace) {
 					continue;
 				} catch (InterruptedException ie) {
-				  LOG.debug("MsgProcessor is interrupted.");
+				  LOG.log(Level.INFO, "MsgProcessor is interrupted.");
 					break;
 				} catch (SSLException se) {
-				  LOG.error(se.getMessage());
+				  LOG.log(Level.SEVERE ,se.getMessage());
 				  break;
 				} catch (IOException e) {
 					// skipping if reconnect already starts due to -ERR code

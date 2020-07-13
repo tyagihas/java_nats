@@ -2,20 +2,31 @@
 
 Java client library and server testing module for [NATS messaging system](http://nats.io).
 
-## Supported Platforms
+## Platforms
 
-java_nats currently supports following Java Platforms :
-- Java Platform, Standard Edition 8 (Java SE 8)
+java_nats has been tested under following Java Platforms :
+- OpenJDK Runtime Environment (build 14.0.1+7)
 
 ## Getting Started
 
-Add dependency to Maven pom.xml
+Download source files and "cd" to java_nats root directory :
+```shell script
+% cd <java_nats>
+
+Compile :
+% javac -d ./bin ./src/main/java/org/nats/*.java
+% export CLASSPATH=./bin
+% javac -d ./bin ./src/test/java/org/nats/benchmark/*.java
+% javac -d ./bin ./src/test/java/org/nats/examples/*.java
+```
+
+Or add dependency to Maven pom.xml
 
 ```xml
 <dependency>
 	<groupId>com.github.tyagihas</groupId>
 	<artifactId>java_nats</artifactId>
-	<version>0.7.1</version>
+	<version>0.7.2</version>
 </dependency>
 ```
 
@@ -230,7 +241,7 @@ NatsEmbeddedServer server = new NatsEmbeddedServer(props);
 
 Start a Nats Embedded Server from command line. Assume CLASSPATH contains java_nats and slf4j jar files.
 ```bash
-% java -Dorg.slf4j.simpleLogger.defaultLogLevel=DEBUG -Xms1G -Xmx1G org.nats.server.NatsEmbeddedServer
+% java -Xms1G -Xmx1G org.nats.server.NatsEmbeddedServer
 ```
 
 Nats Embedded Server is intended for dev and unit testing and not for production use. Following features haven't been implemented in Nats Embedded Server.
@@ -241,7 +252,7 @@ Nats Embedded Server is intended for dev and unit testing and not for production
 
 The MIT License (MIT)
 
-Copyright (c) 2012-2017 Teppei Yagihashi
+Copyright (c) 2012-2020 Teppei Yagihashi
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to

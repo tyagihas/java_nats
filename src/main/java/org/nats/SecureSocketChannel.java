@@ -1,7 +1,7 @@
 /**
 The MIT License (MIT)
 
-Copyright (c) 2012-2016 Teppei Yagihashi
+Copyright (c) 2012-2020 Teppei Yagihashi
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to
@@ -51,8 +51,8 @@ import javax.net.ssl.TrustManagerFactory;
 
 import static org.nats.common.Constants.TLS_VERSION;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * SecureSocketChannel provides TLS channel to Connection class when gnatsd is configured to use TLS.
@@ -60,7 +60,7 @@ import org.slf4j.LoggerFactory;
  * @author Teppei Yagihashi
  */
 public class SecureSocketChannel extends SocketChannel {
-  private static Logger LOG = LoggerFactory.getLogger(SecureSocketChannel.class);
+  private static Logger LOG = Logger.getLogger(SecureSocketChannel.class.getName());
 
   private SocketChannel channel; 
   private SSLContext sslContext;
@@ -73,11 +73,11 @@ public class SecureSocketChannel extends SocketChannel {
     super(SelectorProvider.provider());
 
     try {
-      LOG.debug("Start initializing SecureSocketChannel");
+      LOG.log(Level.ALL, "Start initializing SecureSocketChannel");
       Socket socket = channel.socket();
       KeyManager[] km = null;
       if (opts.getProperty("tls_verify").equals("true")) {
-        LOG.debug("Require client verification");
+        LOG.log(Level.ALL, "Require client verification");
         KeyStore kks = KeyStore.getInstance("JKS");
         char[] pass = opts.getProperty("keystore_pass").toCharArray();
         kks.load(new FileInputStream(opts.getProperty("keystore")), pass);
@@ -120,7 +120,7 @@ public class SecureSocketChannel extends SocketChannel {
   }
 
   private void startHandShake() throws IOException {
-    LOG.debug("Start TLS handshaking");
+    LOG.log(Level.ALL, "Start TLS handshaking");
     ByteBuffer appIn = ByteBuffer.allocateDirect(appBufferSize);
     ByteBuffer appOut = ByteBuffer.allocateDirect(appBufferSize);
     engine.beginHandshake();
@@ -142,7 +142,7 @@ public class SecureSocketChannel extends SocketChannel {
     }
     appIn.clear();
     appOut.clear();
-    LOG.debug("Finish TLS handshaking");
+    LOG.log(Level.ALL, "Finish TLS handshaking");
   }
 
   private HandshakeStatus runDelegatedTasks() {
@@ -220,7 +220,7 @@ public class SecureSocketChannel extends SocketChannel {
 
   public void terminate() throws IOException {
     channel.close();
-    LOG.debug("Terminating TLS channel");
+    LOG.log(Level.ALL, "Terminating TLS channel");
   }
 
   @Override

@@ -5,7 +5,7 @@
 	<groupId>com.github.tyagihas</groupId>
 	<artifactId>java_nats</artifactId>
 	<packaging>jar</packaging>
-	<version>0.7.1</version>
+	<version>0.7.2</version>
 	<name>Java Nats Client</name>
 	<description>Java client for Nats</description>
 	<url>https://github.com/tyagihas/java_nats.git</url>
@@ -109,17 +109,4 @@
 			<url>https://oss.sonatype.org/service/local/staging/deploy/maven2/</url>
 		</repository>
 	</distributionManagement>
-	<dependencies>
-	<dependency>
-		<groupId>org.slf4j</groupId>
-		<artifactId>slf4j-simple</artifactId>
-		<version>1.7.5</version>
-		<scope>runtime</scope>
-	</dependency>
-	<dependency>
-		<groupId>org.slf4j</groupId>
-		<artifactId>slf4j-api</artifactId>
-		<version>1.7.14</version>
-	</dependency>
-	</dependencies>
 </project>

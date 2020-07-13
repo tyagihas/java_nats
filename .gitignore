@@ -2,5 +2,5 @@
 target
 .metadata
 bin/org
-keystore
-truststore
+keystore.jks
+truststore.jks

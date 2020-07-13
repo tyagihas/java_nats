@@ -1,7 +1,7 @@
 /**
 The MIT License (MIT)
 
-Copyright (c) 2012-2016 Teppei Yagihashi
+Copyright (c) 2012-2020 Teppei Yagihashi
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to
@@ -34,11 +34,12 @@ import org.nats.common.NatsMonitor;
 import org.nats.common.Tokenizer;
 
 import static org.nats.common.Constants.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class Subscription {	
-	private static Logger LOG = LoggerFactory.getLogger(Subscription.class);
+	private static Logger LOG = Logger.getLogger(Subscription.class.getName());
 	private static Tokenizer tokenizer;
 
 	private static ConcurrentHashMap<String, Subscription> subList;
@@ -183,7 +184,7 @@ public class Subscription {
 		} catch (IOException e) {
 			subList.remove(subscriber.id);
 			NatsMonitor.getInstance().removeResource(subscriber.conn.getResourceId());
-			LOG.debug(e.getClass().getName() + ", " + "Failed publishing to Client(" + subscriber.conn.getResourceId() + ")");
+			LOG.log(Level.SEVERE, e.getClass().getName() + ", " + "Failed publishing to Client(" + subscriber.conn.getResourceId() + ")");
 		}
 		return false;
 	}

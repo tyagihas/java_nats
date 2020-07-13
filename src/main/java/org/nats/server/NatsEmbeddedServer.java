@@ -1,7 +1,7 @@
 /**
 The MIT License (MIT)
 
-Copyright (c) 2012-2016 Teppei Yagihashi
+Copyright (c) 2012-2020 Teppei Yagihashi
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to
@@ -35,8 +35,9 @@ import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.nats.common.NatsMonitor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * NatsEmbeddedServer is compatible with NATS protocol and emulates behavior of 
@@ -45,7 +46,7 @@ import org.slf4j.LoggerFactory;
  * @author Teppei Yagihashi
  */
 public class NatsEmbeddedServer extends Thread {
-	private Logger LOG = LoggerFactory.getLogger(NatsEmbeddedServer.class);
+	private Logger LOG = Logger.getLogger(NatsEmbeddedServer.class.getName());
 	
 	private NatsMonitor monitor;
 
@@ -103,13 +104,13 @@ public class NatsEmbeddedServer extends Thread {
 		ClientConnection conn = null;
 		Socket sock = null;
 		int port = Integer.parseInt(opts.getProperty("port"));
-		LOG.debug("Starting NatsEmbeddedServer");
+		LOG.log(Level.ALL, "Starting NatsEmbeddedServer");
 		try {
 			serverSocketChannel =  ServerSocketChannel.open();
 			serverSocketChannel.bind(new InetSocketAddress(port));
 			this.setStatus(START);
 		} catch(IOException e) {
-			LOG.error(e.getMessage() + ", Failed binding port=" + port);
+			LOG.log(Level.SEVERE, e.getMessage() + ", Failed binding port=" + port);
 			System.exit(1);
 		}
 		
@@ -124,7 +125,7 @@ public class NatsEmbeddedServer extends Thread {
 				conn.start();
 				monitor.addResource(clientId, conn);
 			} catch (IOException e) {
-				LOG.error(e.getMessage() + ", Error accepting a socket");
+				LOG.log(Level.SEVERE, e.getMessage() + ", Error accepting a socket");
 			}
 		}
 	}

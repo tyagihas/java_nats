@@ -1,7 +1,7 @@
 /**
 The MIT License (MIT)
 
-Copyright (c) 2012-2016 Teppei Yagihashi
+Copyright (c) 2012-2020 Teppei Yagihashi
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to
@@ -31,8 +31,8 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 
 import static org.nats.common.Constants.TLS_REQUIRED;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Server holds a list of Nats server and attributes returned from "INFO" operation. "next" method 
@@ -40,7 +40,7 @@ import org.slf4j.LoggerFactory;
  * @author Teppei Yagihashi
  */
 public class Server {
-  private Logger LOG = LoggerFactory.getLogger(Server.class);
+  private Logger LOG = Logger.getLogger(Server.class.getName());
   private static ConcurrentLinkedQueue<Server> servers;
 
   static {
@@ -138,7 +138,7 @@ public class Server {
       if (kv[1].startsWith("\"")) { trim = 1; }
         String value = kv[1].substring(trim, kv[1].length() - trim);
         info.put(key, value);
-        LOG.debug("info : " + key + "=" + value);
+        LOG.log(Level.INFO, "info : " + key + "=" + value);
       }
   }
 	

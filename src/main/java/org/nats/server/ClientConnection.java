@@ -1,7 +1,7 @@
 /**
 The MIT License (MIT)
 
-Copyright (c) 2012-2016 Teppei Yagihashi
+Copyright (c) 2012-2020 Teppei Yagihashi
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to
@@ -34,11 +34,12 @@ import java.nio.channels.SocketChannel;
 import org.nats.common.NatsMonitor;
 import org.nats.common.NatsUtil;
 import org.nats.MsgHandler;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class ClientConnection extends Thread implements NatsMonitor.Resource {
-	private Logger LOG = LoggerFactory.getLogger(ClientConnection.class);
+	private Logger LOG = Logger.getLogger(ClientConnection.class.getName());
 
 	private String clientId;
 	private SocketChannel channel;
@@ -66,7 +67,7 @@ public class ClientConnection extends Thread implements NatsMonitor.Resource {
 		nUtil = new NatsUtil();
 		pos = 0;
 		length = -1;
-		LOG.debug(this.toString() + " Client(" + clientId + ") initialized");
+		LOG.log(Level.ALL, this.toString() + " Client(" + clientId + ") initialized");
 	}
 	
 	@Override
@@ -162,7 +163,7 @@ public class ClientConnection extends Thread implements NatsMonitor.Resource {
 		info.append("\"host\":\"" + InetAddress.getLocalHost().getHostAddress() + "\",");
 		info.append("\"port\":" + NatsEmbeddedServer.get("port") + ",");
 		info.append("\"auth_required\":" + (Boolean)NatsEmbeddedServer.get("auth") + ",");
-		info.append("\"ssl_required\":" + (Boolean)NatsEmbeddedServer.get("ssl") + ",");
+		info.append("\"tsl_required\":" + (Boolean)NatsEmbeddedServer.get("ssl") + ",");
 		info.append("\"max_payload\":" + (Integer)NatsEmbeddedServer.get("max_payload"));
 		info.append("}" + CR_LF);
 		

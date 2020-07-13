@@ -1,7 +1,7 @@
 /**
 The MIT License (MIT)
 
-Copyright (c) 2012-2016 Teppei Yagihashi
+Copyright (c) 2012-2020 Teppei Yagihashi
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to
@@ -32,8 +32,9 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import org.nats.MsgHandler;
 import org.nats.server.Subscription;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * NatsMonitor monitors a registered Resource by sending a PING message. It removes the resource
@@ -41,7 +42,7 @@ import org.slf4j.LoggerFactory;
  * @author Teppei Yagihashi
  */
 public class NatsMonitor extends Thread {
-	private static final Logger LOG = LoggerFactory.getLogger(NatsMonitor.class);
+	private static final Logger LOG = Logger.getLogger(NatsMonitor.class.getName());
 	
 	/**
 	 * Target resources need to implement Resource interface to be monitored by NatsMonitor.
@@ -89,7 +90,7 @@ public class NatsMonitor extends Thread {
 
 	@Override
 	public void run() {
-		LOG.debug("Starting NatsMonitor");
+		LOG.log(Level.ALL, "Starting NatsMonitor");
 		MsgHandler handler = new MsgHandler() { };
 		int ping_interval = (System.getenv("NATS_PING_INTERVAL") == null) 
 				? DEFAULT_PING_INTERVAL : Integer.parseInt(System.getenv("NATS_PING_INTERVAL"));
@@ -102,7 +103,7 @@ public class NatsMonitor extends Thread {
 					if ((resource != null) && (resource.isConnected())) { resource.sendPing(handler); }
 				}
 			} catch(IOException ioe) {
-				LOG.debug(ioe.getMessage() + ", " + "Failed pinging resoure(" + 
+				LOG.log(Level.WARNING, ioe.getMessage() + ", " + "Failed pinging resoure(" +
 						resource.getResourceId() + ")");
 				Subscription.removeSubscribers(resource.getResourceId());
 				this.removeResource(resource.getResourceId());
@@ -110,6 +111,6 @@ public class NatsMonitor extends Thread {
 				break;
 			}
 		}
-		LOG.debug("Stopping NatsMonitor");
+		LOG.log(Level.ALL, "Stopping NatsMonitor");
 	}
 }
